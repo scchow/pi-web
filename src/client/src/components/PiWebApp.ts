@@ -100,12 +100,12 @@ export class PiWebApp extends LitElement {
           </header>
           <project-list .projects=${state.projects} .selected=${state.selectedProject} .onSelect=${(project: Project) => this.withChatScrollTransition(() => this.workspaces.selectProject(project))}></project-list>
           <workspace-list .workspaces=${state.workspaces} .selected=${state.selectedWorkspace} .onSelect=${(workspace: Workspace) => this.withChatScrollTransition(() => this.workspaces.selectWorkspace(workspace))}></workspace-list>
-          <session-list .sessions=${state.sessions} .statuses=${state.sessionStatuses} .selected=${state.selectedSession} .canStart=${!!state.selectedWorkspace} .onStart=${() => this.withChatScrollTransition(() => this.sessions.startSession())} .onSelect=${(session: SessionInfo) => this.withChatScrollTransition(() => this.sessions.selectSession(session))}></session-list>
+          <session-list .sessions=${state.sessions} .statuses=${state.sessionStatuses} .activities=${state.sessionActivities} .selected=${state.selectedSession} .canStart=${!!state.selectedWorkspace} .onStart=${() => this.withChatScrollTransition(() => this.sessions.startSession())} .onSelect=${(session: SessionInfo) => this.withChatScrollTransition(() => this.sessions.selectSession(session))}></session-list>
         </aside>
         <main>
           ${state.error ? html`<div class="error">${state.error}</div>` : null}
           ${state.selectedSession ? html`
-            <status-bar .status=${state.status} .workspace=${state.selectedWorkspace}></status-bar>
+            <status-bar .status=${state.status} .activity=${state.activity} .workspace=${state.selectedWorkspace}></status-bar>
             <chat-view .sessionId=${state.selectedSession.id} .messages=${state.messages}></chat-view>
             <prompt-editor .sessionId=${state.selectedSession.id} .cwd=${state.selectedWorkspace?.path} .onSend=${(text: string) => this.sessions.send(text)} .onStopSession=${() => this.sessions.stopSession()}></prompt-editor>
             ${state.commandDialog ? html`<command-picker .title=${state.commandDialog.title} .options=${state.commandDialog.options} .onPick=${(value: string) => this.sessions.respondToCommand(state.commandDialog!.requestId, value)} .onCancel=${() => this.sessions.cancelCommand()}></command-picker>` : null}

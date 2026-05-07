@@ -26,6 +26,14 @@ export interface SessionInfo {
   firstMessage: string;
 }
 
+export interface SessionActivity {
+  sessionId: string;
+  phase: "active" | "idle" | "error";
+  label: string;
+  detail?: string;
+  at: string;
+}
+
 export interface SessionStatus {
   sessionId: string;
   model?: { provider?: string; id?: string; name?: string; contextWindow?: number; reasoning?: unknown };

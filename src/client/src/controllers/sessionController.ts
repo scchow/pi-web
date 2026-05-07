@@ -1,4 +1,4 @@
-import { api, type CommandResult, type SessionInfo, type SessionStatus } from "../api";
+import { api, type CommandResult, type SessionActivity, type SessionInfo, type SessionStatus } from "../api";
 import { appendText, normalizeMessages, textMessage } from "../chatMessages";
 import { GlobalSessionSocket, SessionSocket, type SessionUiEvent } from "../sessionSocket";
 import type { GetState, SetState, UpdateUrl } from "./types";
@@ -10,7 +10,10 @@ export class SessionController {
   constructor(private readonly getState: GetState, private readonly setState: SetState, private readonly updateUrl: UpdateUrl) {}
 
   connectStatusUpdates() {
-    this.globalSocket.connect((event) => this.applyStatus(event.status));
+    this.globalSocket.connect((event) => {
+      if (event.type === "status.update") this.applyStatus(event.status);
+      else this.applyActivity(event.activity);
+    });
   }
 
   dispose() {
@@ -20,7 +23,7 @@ export class SessionController {
 
   clearActiveSession() {
     this.socket.close();
-    this.setState({ selectedSession: undefined, messages: [], status: undefined });
+    this.setState({ selectedSession: undefined, messages: [], status: undefined, activity: undefined });
   }
 
   async startSession() {
@@ -115,6 +118,13 @@ export class SessionController {
     }
   }
 
+  private applyActivity(activity: SessionActivity) {
+    this.setState({
+      sessionActivities: { ...this.getState().sessionActivities, [activity.sessionId]: activity },
+      activity: this.getState().selectedSession?.id === activity.sessionId ? activity : this.getState().activity,
+    });
+  }
+
   private applyStatus(status: SessionStatus) {
     this.setState({
       sessionStatuses: { ...this.getState().sessionStatuses, [status.sessionId]: status },
@@ -132,6 +142,8 @@ export class SessionController {
       this.setState({ messages: [...messages, textMessage("tool", `${event.isError ? "✖" : "✓"} ${event.toolName}`)] });
     } else if (event.type === "status.update") {
       this.applyStatus(event.status);
+    } else if (event.type === "activity.update") {
+      this.applyActivity(event.activity);
     } else if (event.type === "session.error") {
       this.setState({ messages: [...messages, textMessage("system", event.message)] });
     }

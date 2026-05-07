@@ -92,8 +92,13 @@ export const statusBarStyles = css`
   :host { display: block; color: #8b949e; font: 12px system-ui, sans-serif; }
   .bar { display: flex; gap: 12px; align-items: center; min-width: 0; padding: 7px 12px; border-bottom: 1px solid #30363d; background: #0d1117; white-space: nowrap; overflow: hidden; }
   span { overflow: hidden; text-overflow: ellipsis; }
-  span:first-child { flex: 1 1 auto; min-width: 80px; }
+  .bar > span:first-child { flex: 1 1 auto; min-width: 80px; }
+  .activity { display: inline-flex; align-items: center; gap: 6px; color: #8b949e; }
+  .activity.active { color: #3fb950; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .45; flex: 0 0 auto; }
+  .activity.active .dot { animation: pulse 1s ease-in-out infinite; opacity: 1; }
   .muted { color: #6e7681; }
+  @keyframes pulse { 0%, 100% { transform: scale(.75); opacity: .55; } 50% { transform: scale(1.2); opacity: 1; } }
 `;
 
 export const autocompleteStyles = css`

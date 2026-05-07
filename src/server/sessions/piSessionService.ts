@@ -18,6 +18,8 @@ import type { ActiveSession } from "./sessionRuntimeStore.js";
 
 export class PiSessionService {
   private readonly active = new Map<string, ActiveSession>();
+  private readonly activities = new Map<string, { phase: "active" | "idle" | "error"; label: string; detail?: string; at: string }>();
+  private readonly heartbeat: NodeJS.Timeout;
   private readonly commandService: SessionCommandService;
   private readonly agentDir = getAgentDir();
   private readonly authStorage = AuthStorage.create();
@@ -29,6 +31,7 @@ export class PiSessionService {
   };
 
   constructor(private readonly events: SessionEventHub) {
+    this.heartbeat = setInterval(() => this.publishHeartbeats(), 2000);
     this.commandService = new SessionCommandService(
       (sessionId) => this.getActive(sessionId),
       (sessionId, text) => this.prompt(sessionId, text),
@@ -90,8 +93,11 @@ export class PiSessionService {
 
   async prompt(sessionId: string, text: string): Promise<void> {
     const session = await this.getOrOpen(sessionId);
+    this.publishActivity(session, "prompt accepted", "active");
     void session.prompt(text).catch((error) => {
-      this.events.publish(sessionId, { type: "session.error", message: error instanceof Error ? error.message : String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      this.publishActivity(session, "error", "error", message);
+      this.events.publish(sessionId, { type: "session.error", message });
     });
   }
 
@@ -114,6 +120,7 @@ export class PiSessionService {
     active.unsubscribe();
     void active.runtime.session.abort().finally(() => active.runtime.dispose());
     this.active.delete(sessionId);
+    this.activities.delete(sessionId);
   }
 
   private async getOrOpen(sessionId: string): Promise<AgentSession> {
@@ -147,9 +154,59 @@ export class PiSessionService {
     const { session } = active.runtime;
     active.unsubscribe = session.subscribe((event) => {
       this.events.publish(session.sessionId, toClientEvent(event));
+      this.publishActivityForEvent(session, event);
       this.publishStatus(session);
     });
     this.active.set(session.sessionId, active);
+  }
+
+  private publishHeartbeats(): void {
+    for (const active of this.active.values()) {
+      const { session } = active.runtime;
+      const activity = this.activities.get(session.sessionId);
+      const isActive = session.isStreaming || session.isBashRunning || session.isCompacting || session.pendingMessageCount > 0 || activity?.phase === "active";
+      if (!isActive) continue;
+      this.publishStatus(session);
+      if (activity) this.publishActivity(session, activity.label, "active", activity.detail);
+      else this.publishActivity(session, this.activityLabelFromStatus(session), "active");
+    }
+  }
+
+  private activityLabelFromStatus(session: AgentSession): string {
+    if (session.isCompacting) return "compacting";
+    if (session.isBashRunning) return "running bash";
+    if (session.isStreaming) return "agent running";
+    if (session.pendingMessageCount) return "queued";
+    return "active";
+  }
+
+  private publishActivityForEvent(session: AgentSession, event: any): void {
+    if (event.type === "agent_start") return this.publishActivity(session, "agent running", "active");
+    if (event.type === "agent_end") {
+      this.publishActivity(session, "idle", "idle");
+      setTimeout(() => {
+        this.publishActivity(session, "idle", "idle");
+        this.publishStatus(session);
+      }, 250);
+      return;
+    }
+    if (event.type === "turn_end") return this.publishActivity(session, "turn complete", "active");
+    if (event.type === "message_start") return this.publishActivity(session, "message started", "active");
+    if (event.type === "message_end") return this.publishActivity(session, "message complete", "idle");
+    if (event.type === "message_update") return this.publishActivity(session, "receiving response", "active");
+    if (event.type === "tool_execution_start") return this.publishActivity(session, "running tool", "active", event.toolName);
+    if (event.type === "tool_execution_end") return this.publishActivity(session, event.isError ? "tool failed" : "tool complete", event.isError ? "error" : "active", event.toolName);
+    if (event.type === "bash_execution_start") return this.publishActivity(session, "running bash", "active");
+    if (event.type === "bash_execution_end") return this.publishActivity(session, "bash complete", "active");
+    this.publishActivity(session, event.type.replaceAll("_", " "), "active");
+  }
+
+  private publishActivity(session: AgentSession, label: string, phase: "active" | "idle" | "error", detail?: string): void {
+    const at = new Date().toISOString();
+    this.activities.set(session.sessionId, { phase, label, detail, at });
+    const activity = { sessionId: session.sessionId, phase, label, detail, at };
+    this.events.publish(session.sessionId, { type: "activity.update", activity });
+    this.events.publishGlobal({ type: "activity.update", activity });
   }
 
   private publishStatus(session: AgentSession): void {
