@@ -3,6 +3,7 @@ import { css } from "lit";
 export type ChatPart =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
+  | { type: "skillInvocation"; name: string; location: string; content: string }
   | { type: "toolCall"; toolName: string; summary: string }
   | { type: "toolResult"; toolName: string; text: string; isError: boolean }
   | { type: "empty" };
@@ -75,6 +76,9 @@ export const chatStyles = css`
   .tool-line { color: #d29922; }
   .summary { color: #8b949e; margin-left: 6px; }
   .part:is(details) { border-top: 1px solid #30363d; padding-top: 8px; }
+  .skill-invocation { border: 1px solid #30363d; border-radius: 8px; background: #161b22; padding: 8px 10px; }
+  .skill-invocation > summary { color: #d2a8ff; }
+  .skill-invocation > small { display: block; margin: 6px 0 8px; color: #8b949e; }
   summary { cursor: pointer; color: #8b949e; }
   pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
   .shell-output { color: #e6edf3; font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.45; }

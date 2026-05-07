@@ -24,11 +24,35 @@ function normalizeMessage(message: unknown): ChatLine[] {
   if (getString(message, "role") === "bashExecution") return [normalizeBashExecution(message)];
   const role = normalizeRole(getString(message, "role"));
   const parts = normalizeContent(getProperty(message, "content"), message);
+  const skillLines = role === "user" ? normalizeSkillInvocation(parts) : undefined;
+  if (skillLines !== undefined) return skillLines;
   const source = normalizeSource(message, parts);
   if (role === "tool") return [{ role, parts, ...(source === undefined ? {} : { source }) }];
 
   const visible = parts.filter((part) => part.type !== "empty");
   return visible.length > 0 ? [{ role, parts: visible, ...(source === undefined ? {} : { source }) }] : [];
+}
+
+function normalizeSkillInvocation(parts: ChatPart[]): ChatLine[] | undefined {
+  if (parts.length !== 1 || parts[0]?.type !== "text") return undefined;
+  const skill = parseSkillBlock(parts[0].text);
+  if (skill === undefined) return undefined;
+  return [
+    { role: "user", parts: [{ type: "skillInvocation", name: skill.name, location: skill.location, content: skill.content }] },
+    ...(skill.userMessage === undefined ? [] : [{ role: "user" as const, parts: [{ type: "text" as const, text: skill.userMessage }] }]),
+  ];
+}
+
+function parseSkillBlock(text: string): { name: string; location: string; content: string; userMessage?: string } | undefined {
+  const match = text.match(/^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]+))?$/);
+  if (match === null) return undefined;
+  const userMessage = match[4]?.trim();
+  return {
+    name: match[1] ?? "skill",
+    location: match[2] ?? "",
+    content: match[3] ?? "",
+    ...(userMessage === undefined || userMessage === "" ? {} : { userMessage }),
+  };
 }
 
 function normalizeSource(message: unknown, _parts: ChatPart[]): ChatLine["source"] | undefined {

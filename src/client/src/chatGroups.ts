@@ -47,5 +47,6 @@ export function summarizeChatGroup(messages: ChatLine[]): string {
 
 function isReadablePart(message: ChatLine, part: ChatPart): boolean {
   if (message.source === "compaction" || message.source === "branch_summary") return false;
+  if (part.type === "skillInvocation") return true;
   return part.type === "text" && (message.role === "user" || message.role === "assistant" || message.role === "system" || message.role === "bash");
 }
