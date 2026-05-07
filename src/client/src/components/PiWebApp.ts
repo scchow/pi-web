@@ -81,6 +81,15 @@ export class PiWebApp extends LitElement {
     this.promptEditor?.focusInput();
   }
 
+  private async withChatPrependTransition(action: () => Promise<void>) {
+    const anchor = this.chatView?.capturePrependScrollAnchor();
+    await action();
+    await this.updateComplete;
+    await this.chatView?.updateComplete;
+    await nextFrame();
+    this.chatView?.restorePrependScrollAnchor(anchor);
+  }
+
   private updateUrl() {
     writeRoute({
       projectId: this.state.selectedProject?.id,
@@ -106,7 +115,7 @@ export class PiWebApp extends LitElement {
           ${state.error ? html`<div class="error">${state.error}</div>` : null}
           ${state.selectedSession ? html`
             <status-bar .status=${state.status} .activity=${state.activity} .workspace=${state.selectedWorkspace}></status-bar>
-            <chat-view .sessionId=${state.selectedSession.id} .messages=${state.messages} .messageStart=${state.messagePageStart} .messageTotal=${state.messagePageTotal} .hasMore=${state.messagePageStart > 0} .loadingMore=${state.isLoadingEarlierMessages} .onLoadMore=${() => this.withChatScrollTransition(() => this.sessions.loadEarlierMessages())}></chat-view>
+            <chat-view .sessionId=${state.selectedSession.id} .messages=${state.messages} .messageStart=${state.messagePageStart} .messageTotal=${state.messagePageTotal} .hasMore=${state.messagePageStart > 0} .loadingMore=${state.isLoadingEarlierMessages} .onLoadMore=${() => this.withChatPrependTransition(() => this.sessions.loadEarlierMessages())}></chat-view>
             <prompt-editor .sessionId=${state.selectedSession.id} .cwd=${state.selectedWorkspace?.path} .onSend=${(text: string) => this.sessions.send(text)} .onStopSession=${() => this.sessions.stopSession()}></prompt-editor>
             ${state.commandDialog !== undefined ? html`<command-picker .title=${state.commandDialog.title} .options=${state.commandDialog.options} .onPick=${(value: string) => this.sessions.respondToCommand(state.commandDialog?.requestId ?? "", value)} .onCancel=${() => { this.sessions.cancelCommand(); }}></command-picker>` : null}
           ` : html`<div class="empty">Select or start a session.</div>`}

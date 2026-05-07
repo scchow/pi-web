@@ -5,6 +5,11 @@ import type { ChatLine, ChatPart } from "./shared";
 import { chatStyles } from "./shared";
 import "./FormattedText";
 
+interface PrependScrollAnchor {
+  scrollTop: number;
+  scrollHeight: number;
+}
+
 function isScrollPosition(value: unknown): value is { index: number; offset: number } {
   return typeof value === "object"
     && value !== null
@@ -199,6 +204,21 @@ export class ChatView extends LitElement {
         chat.scrollTop += currentOffset - stored.offset;
       });
     });
+  }
+
+  capturePrependScrollAnchor(): PrependScrollAnchor | undefined {
+    const chat = this.chat;
+    if (!chat) return undefined;
+    return { scrollTop: chat.scrollTop, scrollHeight: chat.scrollHeight };
+  }
+
+  restorePrependScrollAnchor(anchor: PrependScrollAnchor | undefined): void {
+    const chat = this.chat;
+    if (!chat || !anchor) return;
+    this.withSuppressedScrollSave(() => {
+      chat.scrollTop = anchor.scrollTop + (chat.scrollHeight - anchor.scrollHeight);
+    });
+    this.updateLoadedScrollPercent();
   }
 
   saveScrollPosition(sessionId = this.sessionId) {
