@@ -1,5 +1,7 @@
 # Pi Web
 
+![Pi Web](docs/assets/pi-web-banner.png)
+
 A web control plane for remote, agentic software development with [Pi Coding Agent](https://github.com/mariozechner/pi).
 
 Pi Web lets you run coding agents on a server, organize their work by project and workspace, and steer sessions from a browser. Your laptop becomes a window into persistent development environments instead of the place where all development has to happen.
