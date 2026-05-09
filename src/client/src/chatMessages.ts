@@ -8,6 +8,11 @@ export function textMessage(role: ChatLine["role"], text: string): ChatLine {
   return { role, parts: [{ type: "text", text }] };
 }
 
+export function withMessageMeta(line: ChatLine, rawMessage: unknown): ChatLine {
+  const meta = normalizeMeta(rawMessage);
+  return meta === undefined ? line : { ...line, meta };
+}
+
 export function appendText(messages: ChatLine[], role: ChatLine["role"], text: string): ChatLine[] {
   const last = messages.at(-1);
   const lastPart = last?.parts.at(-1);
@@ -21,16 +26,16 @@ export function appendText(messages: ChatLine[], role: ChatLine["role"], text: s
 }
 
 export function normalizeMessage(message: unknown): ChatLine[] {
-  if (getString(message, "role") === "bashExecution") return [normalizeBashExecution(message)];
+  if (getString(message, "role") === "bashExecution") return [withMessageMeta(normalizeBashExecution(message), message)];
   const role = normalizeRole(getString(message, "role"));
   const parts = normalizeContent(getProperty(message, "content"), message);
   const skillLines = role === "user" ? normalizeSkillInvocation(parts) : undefined;
-  if (skillLines !== undefined) return skillLines;
+  if (skillLines !== undefined) return skillLines.map((line) => withMessageMeta(line, message));
   const source = normalizeSource(message);
-  if (role === "tool") return [{ role, parts, ...(source === undefined ? {} : { source }) }];
+  if (role === "tool") return [withMessageMeta({ role, parts, ...(source === undefined ? {} : { source }) }, message)];
 
   const visible = parts.filter((part) => part.type !== "empty");
-  return visible.length > 0 ? [{ role, parts: visible, ...(source === undefined ? {} : { source }) }] : [];
+  return visible.length > 0 ? [withMessageMeta({ role, parts: visible, ...(source === undefined ? {} : { source }) }, message)] : [];
 }
 
 function normalizeSkillInvocation(parts: ChatPart[]): ChatLine[] | undefined {
@@ -59,6 +64,33 @@ function normalizeSource(message: unknown): ChatLine["source"] | undefined {
   const source = getString(message, "source");
   if (source === "compaction" || source === "branch_summary") return source;
   return undefined;
+}
+
+function normalizeMeta(message: unknown): ChatLine["meta"] | undefined {
+  const timestamp = normalizeTimestamp(getProperty(message, "timestamp"));
+  const model = normalizeModel(message);
+  if (timestamp === undefined && model === undefined) return undefined;
+  return { ...(timestamp === undefined ? {} : { timestamp }), ...(model === undefined ? {} : { model }) };
+}
+
+function normalizeTimestamp(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return new Date(value).toISOString();
+  if (typeof value !== "string" || value === "") return undefined;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? new Date(time).toISOString() : undefined;
+}
+
+function normalizeModel(message: unknown): NonNullable<ChatLine["meta"]>["model"] | undefined {
+  if (getString(message, "role") !== "assistant") return undefined;
+  const provider = getString(message, "provider");
+  const id = getString(message, "model");
+  const responseId = getString(message, "responseModel");
+  if ((provider === undefined || provider === "") && (id === undefined || id === "") && (responseId === undefined || responseId === "")) return undefined;
+  return {
+    ...(provider === undefined || provider === "" ? {} : { provider }),
+    ...(id === undefined || id === "" ? {} : { id }),
+    ...(responseId === undefined || responseId === "" ? {} : { responseId }),
+  };
 }
 
 function normalizeBashExecution(message: unknown): ChatLine {

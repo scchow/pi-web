@@ -30,6 +30,15 @@ describe("groupChatMessages", () => {
     ]);
   });
 
+  it("preserves message metadata when grouping", () => {
+    const message: ChatLine = { role: "assistant", parts: [{ type: "thinking", text: "hidden" }, { type: "text", text: "shown" }], meta: { timestamp: "2026-05-09T12:00:00.000Z", model: { provider: "test", id: "model" } } };
+
+    expect(groupChatMessages([message])).toEqual([
+      { kind: "group", startIndex: 0, messages: [{ role: "assistant", parts: [{ type: "thinking", text: "hidden" }], meta: message.meta }] },
+      { kind: "message", index: 0, message: { role: "assistant", parts: [{ type: "text", text: "shown" }], meta: message.meta } },
+    ]);
+  });
+
   it("treats compaction and branch summaries as grouped events", () => {
     const messages: ChatLine[] = [
       { ...text("assistant", "summary"), source: "compaction" },

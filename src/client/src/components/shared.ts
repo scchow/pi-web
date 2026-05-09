@@ -12,6 +12,10 @@ export interface ChatLine {
   role: "user" | "assistant" | "tool" | "system" | "bash";
   parts: ChatPart[];
   source?: "compaction" | "branch_summary";
+  meta?: {
+    timestamp?: string;
+    model?: { provider?: string; id?: string; responseId?: string };
+  };
 }
 
 export interface CompletionItem {
@@ -146,7 +150,18 @@ export const chatStyles = css`
   .session-activity.receiving strong { color: #3fb950; }
   .session-activity span, .session-activity small { color: #8b949e; }
   .history-boundary small { color: #6e7681; }
-  .label { display: block; margin-bottom: 8px; color: #8b949e; font-size: 12px; text-transform: uppercase; }
+  .msg-header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+  .label { display: block; color: #8b949e; font-size: 12px; text-transform: uppercase; }
+  .msg-header .label { margin: 0; }
+  .msg-meta { min-width: 0; opacity: .28; border: 0; background: transparent; color: #6e7681; padding: 0; font: 11px system-ui, sans-serif; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: opacity .12s ease, max-width .12s ease; cursor: pointer; user-select: text; -webkit-user-select: text; }
+  .msg:hover > .msg-header .msg-meta, .msg:focus-within > .msg-header .msg-meta, .msg-meta:focus, .msg-meta.expanded { opacity: 1; }
+  .msg-meta:focus { outline: 1px solid #30363d; outline-offset: 3px; border-radius: 4px; }
+  @media (hover: none) {
+    .msg-meta { opacity: .75; max-width: 26px; }
+    .msg-meta::before { content: "ⓘ"; font-size: 13px; }
+    .msg-meta:focus, .msg-meta.expanded { opacity: 1; max-width: 75%; }
+    .msg-meta:focus::before, .msg-meta.expanded::before { content: ""; }
+  }
   formatted-text.part { display: block; }
   .part + .part { margin-top: 10px; }
   .tool-line { color: #d29922; }

@@ -450,7 +450,10 @@ function toClientEvent(event: unknown): SessionUiEvent {
   }
   if (eventType === "agent_start") return { type: "agent.start" };
   if (eventType === "agent_end") return { type: "agent.end" };
-  if (eventType === "message_end") return { type: "message.end" };
+  if (eventType === "message_end") {
+    const message = getProperty(event, "message");
+    return message === undefined ? { type: "message.end" } : { type: "message.end", message };
+  }
   return { type: "pi.event", eventType: eventType ?? "unknown" };
 }
 

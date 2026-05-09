@@ -38,6 +38,7 @@ export class ChatView extends LitElement {
   @state() private pinnedToBottom = true;
   @state() private openGroupKeys = new Set<string>();
   @state() private loadedScrollPercent = 100;
+  @state() private expandedMetaKey: string | undefined;
   private suppressScrollSave = false;
   private saveScrollTimer?: number;
   private lastScrollTop = 0;
@@ -155,7 +156,7 @@ export class ChatView extends LitElement {
   private renderMessage(message: ChatLine, index: number) {
     return html`
       <article class="msg ${message.role}" data-index=${index}>
-        <b class="label">${message.role}</b>
+        ${this.renderMessageHeader(message, String(index))}
         ${message.parts.map((part) => this.renderPart(part, message))}
       </article>
     `;
@@ -170,15 +171,59 @@ export class ChatView extends LitElement {
           <span>${summarizeChatGroup(messages)}</span>
         </summary>
         <div class="group-body">
-          ${messages.map((message) => html`
+          ${messages.map((message, offset) => html`
             <section class="group-msg ${message.role}">
-              <b class="label">${message.role}</b>
+              ${this.renderMessageHeader(message, `${String(startIndex)}:${String(offset)}`)}
               ${message.parts.map((part) => this.renderPart(part, message))}
             </section>
           `)}
         </div>
       </details>
     `;
+  }
+
+  private renderMessageHeader(message: ChatLine, key: string) {
+    const meta = this.messageMetaLabel(message);
+    const expanded = this.expandedMetaKey === key;
+    return html`
+      <div class="msg-header">
+        <b class="label">${message.role}</b>
+        <span class=${expanded ? "msg-meta expanded" : "msg-meta"} role="button" tabindex="0" title=${meta.full} aria-label=${meta.full} aria-expanded=${String(expanded)} @click=${() => { this.expandedMetaKey = expanded ? undefined : key; }} @keydown=${(event: KeyboardEvent) => { this.onMetaKeydown(event, key, expanded); }}>${meta.short}</span>
+      </div>
+    `;
+  }
+
+  private onMetaKeydown(event: KeyboardEvent, key: string, expanded: boolean) {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    this.expandedMetaKey = expanded ? undefined : key;
+  }
+
+  private messageMetaLabel(message: ChatLine): { short: string; full: string } {
+    const timestamp = message.meta?.timestamp;
+    const model = this.modelLabel(message);
+    if (timestamp === undefined && model === undefined) return { short: "no info", full: "No Pi message metadata available" };
+    const time = timestamp === undefined ? undefined : this.formatTimestamp(timestamp);
+    const parts = [time?.short, model].filter((part): part is string => part !== undefined && part !== "");
+    const fullParts = [time?.full, model === undefined ? undefined : `Model: ${model}`].filter((part): part is string => part !== undefined && part !== "");
+    return { short: parts.join(" · "), full: fullParts.join(" · ") };
+  }
+
+  private formatTimestamp(timestamp: string): { short: string; full: string } | undefined {
+    const date = new Date(timestamp);
+    if (!Number.isFinite(date.getTime())) return undefined;
+    return {
+      short: new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(date),
+      full: new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" }).format(date),
+    };
+  }
+
+  private modelLabel(message: ChatLine): string | undefined {
+    const model = message.meta?.model;
+    if (model === undefined) return undefined;
+    const id = model.responseId ?? model.id;
+    if (id === undefined || id === "") return model.provider;
+    return model.provider !== undefined && model.provider !== "" ? `${model.provider}/${id}` : id;
   }
 
   private renderPart(part: ChatPart, message?: ChatLine) {

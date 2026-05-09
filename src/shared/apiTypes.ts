@@ -150,7 +150,7 @@ export type SessionUiEvent =
   | { type: "shell.end"; output?: string; exitCode?: number | null; cancelled?: boolean; truncated?: boolean; fullOutputPath?: string; isError?: boolean }
   | { type: "agent.start" }
   | { type: "agent.end" }
-  | { type: "message.end" }
+  | { type: "message.end"; message?: unknown }
   | { type: "status.update"; status: SessionStatus }
   | { type: "activity.update"; activity: SessionActivity }
   | { type: "command.output"; level: "info" | "success" | "error"; message: string }

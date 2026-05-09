@@ -1,4 +1,4 @@
-import { appendText, normalizeMessage, textMessage } from "./chatMessages";
+import { appendText, normalizeMessage, textMessage, withMessageMeta } from "./chatMessages";
 import type { ChatLine } from "./components/shared";
 import { appendShellChunk, finalizeShellMessage, shellStartMessage } from "./shellMessages";
 import type { SessionUiEvent } from "./sessionSocket";
@@ -13,7 +13,23 @@ export function applyTranscriptEvent(messages: ChatLine[], event: SessionUiEvent
   if (event.type === "shell.end") return finalizeShellMessage(messages, event);
   if (event.type === "command.output") return [...messages, textMessage(event.level === "error" ? "system" : "tool", event.message)];
   if (event.type === "session.error") return [...messages, textMessage("system", event.message)];
+  if (event.type === "message.end") return event.message === undefined ? undefined : applyMessageEndMeta(messages, event.message);
   return undefined;
+}
+
+function applyMessageEndMeta(messages: ChatLine[], rawMessage: unknown): ChatLine[] | undefined {
+  const ended = normalizeMessage(rawMessage)[0];
+  if (ended === undefined || ended.meta === undefined) return undefined;
+  const index = findLastMatchingRole(messages, ended.role);
+  if (index < 0) return undefined;
+  return messages.map((message, i) => i === index ? withMessageMeta(message, rawMessage) : message);
+}
+
+function findLastMatchingRole(messages: ChatLine[], role: ChatLine["role"]): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === role) return i;
+  }
+  return -1;
 }
 
 function appendNormalized(messages: ChatLine[], rawMessage: unknown): ChatLine[] {

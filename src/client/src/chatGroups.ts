@@ -24,10 +24,11 @@ export function groupChatMessages(messages: ChatLine[], indexOffset = 0): ChatGr
     const technicalParts = message.parts.filter((part) => !isReadablePart(message, part));
 
     const absoluteIndex = indexOffset + index;
-    if (technicalParts.length) pushEvent({ role: message.role, parts: technicalParts }, absoluteIndex);
+    const metadata = { ...(message.source === undefined ? {} : { source: message.source }), ...(message.meta === undefined ? {} : { meta: message.meta }) };
+    if (technicalParts.length) pushEvent({ role: message.role, parts: technicalParts, ...metadata }, absoluteIndex);
     if (readableParts.length) {
       flushEvents();
-      groups.push({ kind: "message", message: { role: message.role, parts: readableParts }, index: absoluteIndex });
+      groups.push({ kind: "message", message: { role: message.role, parts: readableParts, ...metadata }, index: absoluteIndex });
     }
   });
   flushEvents();
