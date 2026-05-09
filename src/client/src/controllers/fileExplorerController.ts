@@ -1,5 +1,8 @@
 import { api } from "../api";
+import { queryNamespace, setNamespacedQueryKey } from "../namespacedQueryArgs";
 import type { GetState, SetState, UpdateUrl } from "./types";
+
+const FILES_ROUTE_NAMESPACE = queryNamespace("core:workspace.files");
 
 export class FileExplorerController {
   constructor(private readonly getState: GetState, private readonly setState: SetState, private readonly updateUrl: UpdateUrl) {}
@@ -35,11 +38,17 @@ export class FileExplorerController {
   }
 
   async selectFile(path: string): Promise<void> {
+    this.setState({ selectedFilePath: path, selectedFileContent: undefined, workspaceTool: "core:workspace.files", mainView: this.getState().mainView === "chat" ? "chat" : "core:workspace.files" });
+    setNamespacedQueryKey(FILES_ROUTE_NAMESPACE, "file", path);
+    this.updateUrl({ replace: true });
+    await this.restoreFile(path);
+  }
+
+  async restoreFile(path: string): Promise<void> {
     const project = this.getState().selectedProject;
     const workspace = this.getState().selectedWorkspace;
     if (project === undefined || workspace === undefined) return;
-    this.setState({ selectedFilePath: path, selectedFileContent: undefined, workspaceTool: "core:workspace.files", mainView: this.getState().mainView === "chat" ? "chat" : "core:workspace.files" });
-    this.updateUrl();
+    this.setState({ selectedFilePath: path, selectedFileContent: undefined });
     try {
       this.setState({ selectedFileContent: await api.workspaceFile(project.id, workspace.id, path), error: "" });
     } catch (error) {

@@ -1,5 +1,8 @@
 import { api } from "../api";
+import { queryNamespace, setNamespacedQueryKey } from "../namespacedQueryArgs";
 import type { GetState, SetState, UpdateUrl } from "./types";
+
+const GIT_ROUTE_NAMESPACE = queryNamespace("core:workspace.git");
 
 export class GitController {
   private pollTimer: number | undefined;
@@ -23,7 +26,7 @@ export class GitController {
         if (status.files.some((file) => file.path === selectedDiffPath)) await this.refreshDiff(selectedDiffPath);
         else {
           this.setState({ selectedDiffPath: undefined, selectedDiff: undefined, selectedStagedDiff: undefined });
-          this.updateUrl();
+          setNamespacedQueryKey(GIT_ROUTE_NAMESPACE, "diff", undefined, { replace: true });
         }
       }
     } catch (error) {
@@ -33,7 +36,13 @@ export class GitController {
 
   async selectDiff(path: string): Promise<void> {
     this.setState({ selectedDiffPath: path, selectedDiff: undefined, selectedStagedDiff: undefined, workspaceTool: "core:workspace.git", mainView: this.getState().mainView === "chat" ? "chat" : "core:workspace.git" });
-    this.updateUrl();
+    setNamespacedQueryKey(GIT_ROUTE_NAMESPACE, "diff", path);
+    this.updateUrl({ replace: true });
+    await this.refreshDiff(path);
+  }
+
+  async restoreDiff(path: string): Promise<void> {
+    this.setState({ selectedDiffPath: path, selectedDiff: undefined, selectedStagedDiff: undefined });
     await this.refreshDiff(path);
   }
 

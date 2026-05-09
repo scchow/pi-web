@@ -13,6 +13,7 @@ import type { QualifiedContributionId, QualifiedWorkspacePanelContribution, Plug
 import { corePlugin } from "../plugins/core";
 import { examplePlugin } from "../plugins/example";
 import { PluginRegistry } from "../plugins/registry";
+import { queryNamespace, readNamespacedString } from "../namespacedQueryArgs";
 import { readRoute, writeRoute } from "../route";
 import "./ProjectList";
 import "./WorkspaceList";
@@ -101,15 +102,17 @@ export class PiWebApp extends LitElement {
 
   private async restoreRoute(updateUrl: boolean) {
     const route = readRoute();
-    this.setState({ workspaceTool: route.tool ?? this.state.workspaceTool, mainView: route.view ?? this.state.mainView, selectedFilePath: route.file, selectedDiffPath: route.diff });
+    const selectedFilePath = readNamespacedString(queryNamespace("core:workspace.files"), "file");
+    const selectedDiffPath = readNamespacedString(queryNamespace("core:workspace.git"), "diff");
+    this.setState({ workspaceTool: route.tool ?? this.state.workspaceTool, mainView: route.view ?? this.state.mainView, selectedFilePath, selectedDiffPath });
     if (route.projectId === undefined || route.projectId === "") return;
     const project = this.state.projects.find((p) => p.id === route.projectId);
     if (!project) return;
     await this.workspaces.selectProject(project, { workspaceId: route.workspaceId, sessionId: route.sessionId, updateUrl });
+    this.setState({ selectedFilePath, selectedDiffPath });
     if (route.tool === "core:workspace.files") await this.files.refreshFiles();
-    if (route.file !== undefined) await this.files.selectFile(route.file);
+    if (route.tool === "core:workspace.files" && selectedFilePath !== undefined) await this.files.restoreFile(selectedFilePath);
     if (route.tool === "core:workspace.git") await this.git.refreshGit();
-    if (route.diff !== undefined) await this.git.selectDiff(route.diff);
     this.git.updatePolling();
   }
 
@@ -132,16 +135,14 @@ export class PiWebApp extends LitElement {
     this.chatView?.restorePrependScrollAnchor(anchor);
   }
 
-  private updateUrl() {
+  private updateUrl(options?: { replace?: boolean | undefined }) {
     writeRoute({
       projectId: this.state.selectedProject?.id,
       workspaceId: this.state.selectedWorkspace?.id,
       sessionId: this.state.selectedSession?.id,
       tool: this.state.workspaceTool,
       view: this.state.mainView === "navigation" ? undefined : this.state.mainView,
-      file: this.state.selectedFilePath,
-      diff: this.state.selectedDiffPath,
-    });
+    }, options);
   }
 
   private selectWorkspaceTool(tool: QualifiedContributionId) {
