@@ -109,6 +109,7 @@ export class PromptEditor extends LitElement {
           indentUnit.of("  "),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
           EditorView.lineWrapping,
+          EditorView.contentAttributes.of((view) => inputAssistanceContentAttributes(view.state.sliceDoc(0, view.state.selection.main.head))),
           placeholder("Message pi... Use / for commands, @ for files"),
           this.editableCompartment.of(EditorView.editable.of(!this.disabled)),
           this.readOnlyCompartment.of(EditorState.readOnly.of(this.disabled)),
@@ -297,5 +298,24 @@ function emptySlashCommands(): SlashCommand[] {
 
 function emptyFileSuggestions(): FileSuggestion[] {
   return [];
+}
+
+const proseInputAssistanceAttributes: Record<string, string> = {
+  spellcheck: "true",
+  autocorrect: "on",
+  autocapitalize: "sentences",
+  writingsuggestions: "true",
+};
+
+const codeLikeInputAssistanceAttributes: Record<string, string> = {
+  spellcheck: "false",
+  autocorrect: "off",
+  autocapitalize: "off",
+  writingsuggestions: "false",
+};
+
+function inputAssistanceContentAttributes(draftBeforeCursor: string): Record<string, string> {
+  // CodeMirror is optimized for code and disables these by default, but the chat prompt is usually prose.
+  return inputModeForDraft(draftBeforeCursor).kind === "normal" ? proseInputAssistanceAttributes : codeLikeInputAssistanceAttributes;
 }
 
