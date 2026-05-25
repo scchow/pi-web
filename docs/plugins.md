@@ -348,7 +348,8 @@ Notes:
 - Other `state` fields may exist at runtime, but they are PI WEB internals and can change quickly.
 - `enabled` is evaluated when the action palette asks for actions.
 - `selectWorkspaceTool()` expects a qualified panel id such as `my-plugin:workspace.info`.
-- `openTerminal()` switches to the built-in terminal panel. Pass `{ terminalId }` to deep-link to a specific terminal after creating one through the terminal API.
+- `openTerminal()` switches to the built-in terminal panel. Pass `{ terminalId }` to deep-link to a specific terminal.
+- Only fields documented here and declared in `plugin-api.d.ts` are stable public plugin API. PI WEB may attach `piWebInternal` fields at runtime for first-party dogfooding; plugins should not depend on those fields because they can change or disappear without notice.
 
 #### Keyboard shortcuts
 
@@ -399,7 +400,7 @@ interface WorkspacePanelContext {
 }
 ```
 
-`workspace` and `openTerminal()` are documented as stable for panel callbacks. Other fields may exist at runtime, but they are PI WEB internals and can change quickly. Use `openTerminal({ terminalId })` when a panel creates a terminal and wants PI WEB to navigate to that specific terminal. If a panel needs file, git, or session data, prefer explicit `fetch()` calls and keep them isolated.
+`workspace` and `openTerminal()` are documented as stable for panel callbacks. Other fields may exist at runtime, but they are PI WEB internals and can change quickly. If a panel needs file, git, terminal, or session data beyond the helpers documented here, prefer explicit `fetch()` calls and keep them isolated.
 
 Useful workspace shape:
 

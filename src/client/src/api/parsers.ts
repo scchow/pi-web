@@ -1,4 +1,4 @@
-import type { ArchiveSessionsResponse, AuthProviderOption, AuthProviderStatus, AuthProvidersResponse, AuthStatusSource, AuthType, CommandOption, CommandResult, FileContentResponse, FileSuggestion, FileTreeEntry, FileTreeResponse, GitDiffResponse, GitFileState, GitStatusFile, GitStatusResponse, MessagePage, ModelSelectionResponse, OAuthFlowState, PiWebComponentStatus, PiWebInstallationInfo, PiWebReleaseStatus, PiWebServiceComponent, PiWebStatusMessage, PiWebStatusResponse, PiWebStatusSeverity, Project, QueuedSessionMessage, SessionInfo, SessionModel, SessionStatus, SlashCommand, TerminalInfo, ThinkingLevel, ThinkingLevelsResponse, Workspace, WorkspaceActivity, WorkspaceActivityResponse } from "../../../shared/apiTypes";
+import type { ArchiveSessionsResponse, AuthProviderOption, AuthProviderStatus, AuthProvidersResponse, AuthStatusSource, AuthType, CommandOption, CommandResult, FileContentResponse, FileSuggestion, FileTreeEntry, FileTreeResponse, GitDiffResponse, GitFileState, GitStatusFile, GitStatusResponse, MessagePage, ModelSelectionResponse, OAuthFlowState, PiWebComponentStatus, PiWebInstallationInfo, PiWebReleaseStatus, PiWebServiceComponent, PiWebStatusMessage, PiWebStatusResponse, PiWebStatusSeverity, Project, QueuedSessionMessage, SessionInfo, SessionModel, SessionStatus, SlashCommand, TerminalCommandRun, TerminalCommandRunStatus, TerminalInfo, ThinkingLevel, ThinkingLevelsResponse, Workspace, WorkspaceActivity, WorkspaceActivityResponse } from "../../../shared/apiTypes";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -306,7 +306,39 @@ export function parseGitDiffResponse(value: unknown): GitDiffResponse {
 
 export function parseTerminalInfo(value: unknown): TerminalInfo {
   const record = requireRecord(value);
-  return { id: requireString(record, "id"), cwd: requireString(record, "cwd"), name: requireString(record, "name"), createdAt: requireString(record, "createdAt"), exited: requireBoolean(record, "exited"), ...optionalField("exitCode", optionalNumber(record, "exitCode")) };
+  return { id: requireString(record, "id"), cwd: requireString(record, "cwd"), name: requireString(record, "name"), createdAt: requireString(record, "createdAt"), exited: requireBoolean(record, "exited"), ...optionalField("exitCode", optionalNumber(record, "exitCode")), ...optionalField("commandRunId", optionalString(record, "commandRunId")) };
+}
+
+export function parseTerminalCommandRun(value: unknown): TerminalCommandRun {
+  const record = requireRecord(value);
+  return {
+    id: requireString(record, "id"),
+    origin: requireString(record, "origin"),
+    projectId: requireString(record, "projectId"),
+    workspaceId: requireString(record, "workspaceId"),
+    terminalId: requireString(record, "terminalId"),
+    title: requireString(record, "title"),
+    command: requireString(record, "command"),
+    status: parseTerminalCommandRunStatus(record["status"]),
+    ...optionalField("exitCode", optionalNumber(record, "exitCode")),
+    createdAt: requireString(record, "createdAt"),
+    ...optionalField("startedAt", optionalString(record, "startedAt")),
+    ...optionalField("completedAt", optionalString(record, "completedAt")),
+    metadata: parseStringRecord(record["metadata"], "metadata"),
+  };
+}
+
+function parseTerminalCommandRunStatus(value: unknown): TerminalCommandRunStatus {
+  if (value !== "queued" && value !== "running" && value !== "succeeded" && value !== "failed") throw new Error("Invalid terminal command run status");
+  return value;
+}
+
+function parseStringRecord(value: unknown, key: string): Record<string, string> {
+  const record = requireRecord(value);
+  return Object.fromEntries(Object.entries(record).map(([field, fieldValue]) => {
+    if (typeof fieldValue !== "string") throw new Error(`Expected string record field: ${key}.${field}`);
+    return [field, fieldValue];
+  }));
 }
 
 export function parseWorkspaceActivity(value: unknown): WorkspaceActivity {

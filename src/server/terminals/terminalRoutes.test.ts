@@ -2,7 +2,8 @@ import Fastify, { type FastifyInstance } from "fastify";
 import fastifyWebsocket from "@fastify/websocket";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket, type RawData } from "ws";
-import type { TerminalInfo } from "./terminalService.js";
+import type { TerminalCommandRun, TerminalCommandRunFilter } from "../../shared/apiTypes.js";
+import type { RunTerminalCommandOptions, TerminalInfo } from "./terminalService.js";
 import { registerTerminalRoutes, type TerminalRouteService } from "./terminalRoutes.js";
 
 let app: FastifyInstance;
@@ -20,7 +21,7 @@ afterEach(async () => {
   await app.close();
 });
 
-describe("terminal socket routes", () => {
+describe("terminal routes", () => {
   it("applies the initial socket size before attaching and replaying output", async () => {
     const socket = new WebSocket(`${serverUrl(app)}/terminals/t1/socket?cols=120.9&rows=40.2`);
 
@@ -29,10 +30,37 @@ describe("terminal socket routes", () => {
 
     socket.close();
   });
+
+  it("creates and lists terminal command runs with filters", async () => {
+    const createResponse = await app.inject({
+      method: "POST",
+      url: "/terminal-command-runs",
+      payload: { origin: "core", projectId: "p1", workspaceId: "w1", cwd: "/repo", title: "Build", command: "npm test", metadata: { "pi.operation": "test" } },
+    });
+
+    expect(createResponse.statusCode).toBe(200);
+    expect(createResponse.json<TerminalCommandRun>()).toMatchObject({ id: "run1", terminalId: "t-run", status: "running" });
+
+    const listResponse = await app.inject({ method: "GET", url: `/terminal-command-runs?projectId=p1&statuses=running&metadata=${encodeURIComponent(JSON.stringify({ "pi.operation": "test" }))}` });
+
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json<TerminalCommandRun[]>()).toHaveLength(1);
+    expect(terminals.filters).toEqual([{ projectId: "p1", statuses: ["running"], metadata: { "pi.operation": "test" } }]);
+
+    const cancelResponse = await app.inject({ method: "POST", url: "/terminal-command-runs/run1/cancel" });
+    expect(cancelResponse.statusCode).toBe(200);
+    expect(terminals.events).toContain("cancel:run1");
+
+    const continueResponse = await app.inject({ method: "POST", url: "/terminals/t-run/continue" });
+    expect(continueResponse.statusCode).toBe(200);
+    expect(terminals.events).toContain("continue:t-run");
+  });
 });
 
 class FakeTerminals implements TerminalRouteService {
   readonly events: string[] = [];
+  readonly filters: TerminalCommandRunFilter[] = [];
+  private readonly commandRuns = new Map<string, TerminalCommandRun>();
 
   list(cwd: string): TerminalInfo[] {
     void cwd;
@@ -68,6 +96,49 @@ class FakeTerminals implements TerminalRouteService {
   resize(id: string, cols: number, rows: number): void {
     this.events.push(`resize:${id}:${String(cols)}x${String(rows)}`);
   }
+
+  continue(id: string): TerminalInfo {
+    this.events.push(`continue:${id}`);
+    return { id, cwd: "/repo", name: "Shell 1", createdAt: "2026-05-13T00:00:00.000Z", exited: false };
+  }
+
+  runCommand(options: RunTerminalCommandOptions): TerminalCommandRun {
+    const run: TerminalCommandRun = {
+      id: "run1",
+      origin: options.origin,
+      projectId: options.projectId,
+      workspaceId: options.workspaceId,
+      terminalId: "t-run",
+      title: options.title,
+      command: options.command,
+      status: "running",
+      createdAt: "2026-05-13T00:00:00.000Z",
+      metadata: routeMetadata(options.metadata),
+    };
+    this.commandRuns.set(run.id, run);
+    return run;
+  }
+
+  listCommandRuns(filter: TerminalCommandRunFilter = {}): TerminalCommandRun[] {
+    this.filters.push(filter);
+    return [...this.commandRuns.values()];
+  }
+
+  getCommandRun(runId: string): TerminalCommandRun | undefined {
+    return this.commandRuns.get(runId);
+  }
+
+  cancelCommandRun(runId: string): TerminalCommandRun {
+    const run = this.commandRuns.get(runId);
+    if (run === undefined) throw new Error("Terminal command run not found");
+    this.events.push(`cancel:${runId}`);
+    return run;
+  }
+}
+
+function routeMetadata(value: unknown): Record<string, string> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 }
 
 function serverUrl(instance: FastifyInstance): string {

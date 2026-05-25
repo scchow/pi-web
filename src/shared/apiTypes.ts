@@ -201,6 +201,46 @@ export interface TerminalInfo {
   createdAt: string;
   exited: boolean;
   exitCode?: number;
+  commandRunId?: string;
+}
+
+export type TerminalCommandRunStatus = "queued" | "running" | "succeeded" | "failed";
+
+export interface TerminalCommandRun {
+  id: string;
+  origin: string;
+  projectId: string;
+  workspaceId: string;
+  terminalId: string;
+  title: string;
+  command: string;
+  status: TerminalCommandRunStatus;
+  exitCode?: number;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  metadata: Record<string, string>;
+}
+
+export interface RunTerminalCommandInput {
+  workspace: Workspace;
+  title: string;
+  command: string;
+  metadata?: Record<string, string>;
+  open?: boolean;
+}
+
+export interface TerminalCommandRunHandle {
+  run: TerminalCommandRun;
+  completed: Promise<TerminalCommandRun>;
+}
+
+export interface TerminalCommandRunFilter {
+  projectId?: string;
+  workspaceId?: string;
+  terminalId?: string;
+  statuses?: TerminalCommandRunStatus[];
+  metadata?: Record<string, string>;
 }
 
 export type PiWebServiceComponent = "web" | "sessiond";

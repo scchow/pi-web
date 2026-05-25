@@ -1,4 +1,4 @@
-import type { FileSuggestion } from "../../../shared/apiTypes";
+import type { FileSuggestion, RunTerminalCommandInput, TerminalCommandRun, TerminalCommandRunFilter } from "../../../shared/apiTypes";
 import { request } from "./http";
 import {
   arrayOf,
@@ -24,6 +24,7 @@ import {
   parseSessionStatus,
   parseSlashCommand,
   parseStopped,
+  parseTerminalCommandRun,
   parseTerminalInfo,
   parseThinkingLevelsResponse,
   parseWorkspace,
@@ -93,7 +94,44 @@ export const terminalsApi = {
   terminals: (projectId: string, workspaceId: string) => request(`/api/projects/${encodeURIComponent(projectId)}/workspaces/${encodeURIComponent(workspaceId)}/terminals`, arrayOf(parseTerminalInfo)),
   startTerminal: (projectId: string, workspaceId: string, options?: { name?: string; cols?: number; rows?: number }) => request(`/api/projects/${encodeURIComponent(projectId)}/workspaces/${encodeURIComponent(workspaceId)}/terminals`, parseTerminalInfo, { method: "POST", body: JSON.stringify(options ?? {}) }),
   closeTerminal: (projectId: string, workspaceId: string, terminalId: string) => request(`/api/projects/${encodeURIComponent(projectId)}/workspaces/${encodeURIComponent(workspaceId)}/terminals/${encodeURIComponent(terminalId)}`, parseClosed, { method: "DELETE" }),
+  continueTerminal: (projectId: string, workspaceId: string, terminalId: string) => request(`/api/projects/${encodeURIComponent(projectId)}/workspaces/${encodeURIComponent(workspaceId)}/terminals/${encodeURIComponent(terminalId)}/continue`, parseTerminalInfo, { method: "POST" }),
+  runTerminalCommand: (origin: string, input: RunTerminalCommandInput) => request(`/api/projects/${encodeURIComponent(input.workspace.projectId)}/workspaces/${encodeURIComponent(input.workspace.id)}/terminal-command-runs`, parseTerminalCommandRun, { method: "POST", body: JSON.stringify({ origin, title: input.title, command: input.command, metadata: input.metadata ?? {} }) }),
+  listCommandRuns: (filter?: TerminalCommandRunFilter) => request(`/api/terminal-command-runs${terminalCommandRunFilterQuery(filter)}`, arrayOf(parseTerminalCommandRun)),
+  getCommandRun: (runId: string) => getOptionalTerminalCommandRun(runId),
+  cancelCommandRun: (runId: string) => request(`/api/terminal-command-runs/${encodeURIComponent(runId)}/cancel`, parseTerminalCommandRun, { method: "POST" }),
 };
+
+async function getOptionalTerminalCommandRun(runId: string): Promise<TerminalCommandRun | undefined> {
+  const response = await fetch(`/api/terminal-command-runs/${encodeURIComponent(runId)}`);
+  if (response.status === 404) return undefined;
+  if (!response.ok) {
+    const body: unknown = await response.json().catch((): unknown => ({}));
+    throw new Error(apiErrorMessage(body) ?? response.statusText);
+  }
+  return parseTerminalCommandRun(await response.json());
+}
+
+function terminalCommandRunFilterQuery(filter: TerminalCommandRunFilter | undefined): string {
+  if (filter === undefined) return "";
+  const params = new URLSearchParams();
+  if (filter.projectId !== undefined) params.set("projectId", filter.projectId);
+  if (filter.workspaceId !== undefined) params.set("workspaceId", filter.workspaceId);
+  if (filter.terminalId !== undefined) params.set("terminalId", filter.terminalId);
+  if (filter.statuses !== undefined && filter.statuses.length > 0) params.set("statuses", filter.statuses.join(","));
+  if (filter.metadata !== undefined && Object.keys(filter.metadata).length > 0) params.set("metadata", JSON.stringify(filter.metadata));
+  const query = params.toString();
+  return query === "" ? "" : `?${query}`;
+}
+
+function apiErrorMessage(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const error = value["error"];
+  return typeof error === "string" ? error : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 export const filesApi = {
   files: (cwd: string, query: string, kind?: FileSuggestion["kind"], mode?: "file" | "path") => request(`/api/files?cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(query)}${kind !== undefined ? `&kind=${encodeURIComponent(kind)}` : ""}${mode !== undefined ? `&mode=${encodeURIComponent(mode)}` : ""}`, arrayOf(parseFileSuggestion)),

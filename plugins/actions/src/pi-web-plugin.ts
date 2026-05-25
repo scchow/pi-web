@@ -1,6 +1,7 @@
 import type { PiWebPlugin } from "@jmfederico/pi-web/plugin-api";
 import { ACTIONS_CONFIG_PATH } from "./config.js";
 import { actionsPanelBadge, defineActionsPanelElement } from "./actionsPanelElement.js";
+import { terminalCommandRunsFromContext } from "./piWebInternal.js";
 
 const plugin: PiWebPlugin = {
   apiVersion: 1,
@@ -29,7 +30,7 @@ const plugin: PiWebPlugin = {
             title: "Actions",
             order: 40,
             badge: ({ workspace }) => actionsPanelBadge(workspace),
-            render: ({ workspace, openTerminal }) => html`<pi-web-actions-panel .workspace=${workspace} .openTerminal=${openTerminal}></pi-web-actions-panel>`,
+            render: (context) => html`<pi-web-actions-panel .workspace=${context.workspace} .terminalCommandRuns=${terminalCommandRunsFromContext(context)} .openTerminal=${context.openTerminal}></pi-web-actions-panel>`,
           },
         ],
       },

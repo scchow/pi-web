@@ -17,7 +17,9 @@ export class WorkspaceList extends LitElement {
   @property({ type: Boolean, reflect: true }) collapsed = false;
   @property({ attribute: false }) workspaceLabelItems: (workspace: Workspace) => WorkspaceLabelItem[] = () => [];
   @property({ attribute: false }) activities: Record<string, WorkspaceActivity> = {};
+  @property({ attribute: false }) deletingWorkspaceIds: string[] = [];
   @property({ attribute: false }) onSelect?: (workspace: Workspace) => void;
+  @property({ attribute: false }) onDelete?: (workspace: Workspace) => void;
   @property({ attribute: false }) onToggleCollapsed?: () => void;
   @state() private openMenuWorkspaceId: string | undefined;
   @state() private menuStyle = "";
@@ -86,6 +88,7 @@ export class WorkspaceList extends LitElement {
       <span class="workspace-primary">
         ${this.renderActivity(workspace)}
         <span class="workspace-primary-label">${label}</span>
+        ${this.isDeleting(workspace) ? html`<span class="workspace-status">Deleting…</span>` : null}
       </span>
       ${items.length === 0 ? null : html`
         <small class="workspace-secondary">
@@ -110,9 +113,20 @@ export class WorkspaceList extends LitElement {
         >⋯</button>
         ${open ? html`
           <div class="action-menu-panel workspace-menu-panel" id=${menuId} style=${this.menuStyle} @click=${(event: MouseEvent) => { event.stopPropagation(); }}>
+            ${this.renderWorkspaceActions(workspace)}
             ${this.renderWorkspaceDetails(label, items, workspace)}
           </div>
         ` : null}
+      </div>
+    `;
+  }
+
+  private renderWorkspaceActions(workspace: Workspace): TemplateResult | undefined {
+    if (!canDeleteWorkspace(workspace)) return undefined;
+    const deleting = this.isDeleting(workspace);
+    return html`
+      <div class="workspace-menu-actions">
+        <button class="danger" title=${deleting ? "Workspace deletion in progress" : "Delete workspace"} ?disabled=${deleting} @click=${() => { this.delete(workspace); }}>${deleting ? "Deleting…" : "Delete workspace"}</button>
       </div>
     `;
   }
@@ -136,6 +150,16 @@ export class WorkspaceList extends LitElement {
         `}
       </dl>
     `;
+  }
+
+  private delete(workspace: Workspace): void {
+    if (this.isDeleting(workspace)) return;
+    this.openMenuWorkspaceId = undefined;
+    this.onDelete?.(workspace);
+  }
+
+  private isDeleting(workspace: Workspace): boolean {
+    return this.deletingWorkspaceIds.includes(workspace.id);
   }
 
   private toggleMenu(workspaceId: string, target: EventTarget | null): void {
@@ -166,6 +190,10 @@ export class WorkspaceList extends LitElement {
 
 function workspacePrimaryLabel(workspace: Workspace): string {
   return `${workspace.branch ?? workspace.label}${workspace.isMain ? " · main" : ""}`;
+}
+
+function canDeleteWorkspace(workspace: Workspace): boolean {
+  return workspace.isGitWorktree && !workspace.isMain;
 }
 
 function workspaceMenuId(workspaceId: string): string {

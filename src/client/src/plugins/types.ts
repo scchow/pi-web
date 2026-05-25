@@ -1,6 +1,6 @@
 import type { TemplateResult } from "lit";
 import type { AppAction } from "../actions";
-import type { FileContentResponse, FileTreeEntry, GitDiffResponse, GitStatusResponse, Workspace } from "../api";
+import type { FileContentResponse, FileTreeEntry, GitDiffResponse, GitStatusResponse, RunTerminalCommandInput, TerminalCommandRun, TerminalCommandRunFilter, TerminalCommandRunHandle, Workspace } from "../api";
 import type { AppState } from "../appState";
 
 export type PluginId = string;
@@ -37,8 +37,20 @@ export interface PluginContributions {
   themePairs?: ThemePairContribution[];
 }
 
+export interface PiWebInternalRuntimeContext {
+  terminalCommandRuns: TerminalCommandRunsInternalRuntime;
+}
+
+export interface TerminalCommandRunsInternalRuntime {
+  runCommand(input: RunTerminalCommandInput): Promise<TerminalCommandRunHandle>;
+  listCommandRuns(filter?: TerminalCommandRunFilter): Promise<TerminalCommandRun[]>;
+  getCommandRun(runId: string): Promise<TerminalCommandRun | undefined>;
+  open(options?: { terminalId?: string | undefined }): void;
+}
+
 export interface PluginRuntimeContext {
   state: AppState;
+  piWebInternal?: PiWebInternalRuntimeContext;
   openActionPalette: () => void;
   focusPrompt: () => void;
   addProject: () => void | Promise<void>;
@@ -52,6 +64,7 @@ export interface PluginRuntimeContext {
   refreshGit: () => void | Promise<void>;
   refreshAppData: () => void | Promise<void>;
   reloadPage: () => void;
+  deleteWorkspace: (workspace?: Workspace) => void | Promise<void>;
   startSession: () => void | Promise<void>;
   archiveSession: () => void | Promise<void>;
   stopActiveWork: () => void | Promise<void>;
@@ -80,6 +93,7 @@ export interface WorkspacePanelVisibilityContext {
 export interface WorkspacePanelContext {
   workspace: Workspace;
   state: AppState;
+  piWebInternal?: PiWebInternalRuntimeContext;
   fileTree: FileTreeEntry[];
   expandedDirs: Record<string, FileTreeEntry[]>;
   selectedFilePath: string | undefined;

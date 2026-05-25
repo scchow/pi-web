@@ -10,6 +10,14 @@ function createContext(statePatch: Partial<AppState> = {}) {
   const calls: string[] = [];
   const context: PluginRuntimeContext = {
     state: { ...initialAppState(), ...statePatch },
+    piWebInternal: {
+      terminalCommandRuns: {
+        runCommand: vi.fn(),
+        listCommandRuns: vi.fn(),
+        getCommandRun: vi.fn(),
+        open: vi.fn((options?: { terminalId?: string | undefined }) => { calls.push(`terminal.open:${options?.terminalId ?? ""}`); }),
+      },
+    },
     openActionPalette: vi.fn(() => { calls.push("openActionPalette"); }),
     focusPrompt: vi.fn(() => { calls.push("focusPrompt"); }),
     addProject: vi.fn(() => { calls.push("addProject"); }),
@@ -23,6 +31,7 @@ function createContext(statePatch: Partial<AppState> = {}) {
     refreshGit: vi.fn(() => { calls.push("refreshGit"); }),
     refreshAppData: vi.fn(() => { calls.push("refreshAppData"); }),
     reloadPage: vi.fn(() => { calls.push("reloadPage"); }),
+    deleteWorkspace: vi.fn(() => { calls.push("deleteWorkspace"); }),
     startSession: vi.fn(() => { calls.push("startSession"); }),
     archiveSession: vi.fn(() => { calls.push("archiveSession"); }),
     stopActiveWork: vi.fn(() => { calls.push("stopActiveWork"); }),
@@ -72,6 +81,21 @@ describe("PluginRegistry", () => {
     expect(inactive.find((action) => action.id === "core:view.terminal")?.enabled).toBe(false);
     expect(active.find((action) => action.id === "core:view.files")?.enabled).toBe(true);
     expect(active.find((action) => action.id === "core:view.terminal")?.enabled).toBe(true);
+    expect(active.find((action) => action.id === "core:workspace.delete")?.enabled).toBe(false);
+
+    const deletable = registry.getActions(createContext({ selectedWorkspace: testWorkspace({ isMain: false, isGitWorktree: true }) }).context);
+    expect(deletable.find((action) => action.id === "core:workspace.delete")?.enabled).toBe(true);
+  });
+
+  it("routes workspace delete through the runtime context", () => {
+    const registry = new PluginRegistry();
+    registry.register({ id: "core", plugin: corePlugin });
+    const { context, calls } = createContext({ selectedWorkspace: testWorkspace({ isMain: false, isGitWorktree: true }) });
+    const action = registry.getActions(context).find((candidate) => candidate.id === "core:workspace.delete");
+
+    if (action !== undefined) void action.run();
+
+    expect(calls).toEqual(["deleteWorkspace"]);
   });
 
   it("routes refresh current to the active core workspace panel", () => {
@@ -205,8 +229,8 @@ describe("PluginRegistry", () => {
   });
 });
 
-function testWorkspace(): Workspace {
-  return { id: "w1", projectId: "p1", path: "/tmp/project", label: "main", isMain: true, isGitRepo: true, isGitWorktree: false };
+function testWorkspace(patch: Partial<Workspace> = {}): Workspace {
+  return { id: "w1", projectId: "p1", path: "/tmp/project", label: "main", isMain: true, isGitRepo: true, isGitWorktree: false, ...patch };
 }
 
 function testThemeTokens(): ThemeTokens {

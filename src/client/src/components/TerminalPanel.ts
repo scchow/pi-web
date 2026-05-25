@@ -3,7 +3,7 @@ import { customElement, property, query, state } from "lit/decorators.js";
 import { Terminal, type ITerminalOptions, type ITheme } from "@xterm/xterm";
 import { FitAddon, type ITerminalDimensions } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { terminalSocket, terminalsApi, type TerminalInfo, type Workspace } from "../api";
+import { terminalSocket, terminalsApi, type TerminalCommandRun, type TerminalInfo, type Workspace } from "../api";
 import { selectFallbackTerminal, selectPreferredTerminal } from "../controllers/terminalSelection";
 
 const TERMINAL_OPTIONS_BASE: ITerminalOptions = {
@@ -14,6 +14,7 @@ const TERMINAL_OPTIONS_BASE: ITerminalOptions = {
 };
 
 const DEFAULT_TERMINAL_SIZE: TerminalSize = { cols: 100, rows: 30 };
+const COMMAND_RUN_POLL_INTERVAL_MS = 1000;
 
 @customElement("terminal-panel")
 export class TerminalPanel extends LitElement {
@@ -23,10 +24,13 @@ export class TerminalPanel extends LitElement {
   @property({ attribute: false }) onSelectTerminal: (terminalId: string | undefined, options?: { replace?: boolean | undefined }) => void = () => undefined;
   @query(".terminal-host") private terminalHost?: HTMLDivElement | null;
   @state() private terminals: TerminalInfo[] = [];
+  @state() private commandRuns: TerminalCommandRun[] = [];
   @state() private selectedId: string | undefined;
   @state() private loading = false;
   @state() private error: string | undefined;
   @state() private visible = false;
+  @state() private cancellingRunIds: string[] = [];
+  @state() private continuingTerminalIds: string[] = [];
 
   private terminal: Terminal | undefined;
   private fitAddon: FitAddon | undefined;
@@ -38,6 +42,7 @@ export class TerminalPanel extends LitElement {
   private observedCwd: string | undefined;
   private loadedCwd: string | undefined;
   private autoStartConsumedCwd: string | undefined;
+  private commandRunPollTimer: number | undefined;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -57,6 +62,7 @@ export class TerminalPanel extends LitElement {
     this.intersectionObserver = undefined;
     this.themeObserver?.disconnect();
     this.themeObserver = undefined;
+    this.updateCommandRunPolling(false);
     this.disposeTerminalView();
     super.disconnectedCallback();
   }
@@ -68,7 +74,11 @@ export class TerminalPanel extends LitElement {
       this.loadedCwd = undefined;
       this.autoStartConsumedCwd = undefined;
       this.terminals = [];
+      this.commandRuns = [];
       this.selectedId = undefined;
+      this.cancellingRunIds = [];
+      this.continuingTerminalIds = [];
+      this.updateCommandRunPolling(false);
       this.disposeTerminalView();
       return;
     }
@@ -84,6 +94,8 @@ export class TerminalPanel extends LitElement {
   }
 
   override updated(changed: PropertyValues<this>): void {
+    if (!this.visible) this.updateCommandRunPolling(false);
+    else if (this.hasPendingCommandRuns()) this.updateCommandRunPolling(true);
     this.loadVisibleWorkspaceTerminals();
     if (changed.has("selectedTerminalId") && this.shouldReloadForRequestedTerminal()) void this.loadTerminals();
     this.ensureTerminalView();
@@ -100,11 +112,17 @@ export class TerminalPanel extends LitElement {
     this.loading = true;
     this.error = undefined;
     try {
-      if (this.workspace === undefined) return;
+      const workspace = this.workspace;
+      if (workspace === undefined) return;
       const shouldAutoStart = this.consumeAutoStart();
-      const terminals = await terminalsApi.terminals(this.workspace.projectId, this.workspace.id);
+      const [terminals, commandRuns] = await Promise.all([
+        terminalsApi.terminals(workspace.projectId, workspace.id),
+        terminalsApi.listCommandRuns({ projectId: workspace.projectId, workspaceId: workspace.id }),
+      ]);
       this.terminals = terminals;
+      this.commandRuns = commandRuns;
       this.selectPreferredLoadedTerminal({ replaceUrl: true });
+      this.updateCommandRunPolling(this.hasPendingCommandRuns(commandRuns));
       if (terminals.length === 0 && shouldAutoStart) await this.startTerminal();
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
@@ -185,6 +203,75 @@ export class TerminalPanel extends LitElement {
     this.onSelectTerminal(id);
   }
 
+  private selectedTerminalInfo(): TerminalInfo | undefined {
+    return this.terminals.find((terminal) => terminal.id === this.selectedId);
+  }
+
+  private selectedCommandRun(): TerminalCommandRun | undefined {
+    const commandRunId = this.selectedTerminalInfo()?.commandRunId;
+    if (commandRunId === undefined) return undefined;
+    return this.commandRuns.find((run) => run.id === commandRunId);
+  }
+
+  private async loadCommandRuns(): Promise<void> {
+    const workspace = this.workspace;
+    if (workspace === undefined) return;
+    try {
+      const commandRuns = await terminalsApi.listCommandRuns({ projectId: workspace.projectId, workspaceId: workspace.id });
+      this.commandRuns = commandRuns;
+      this.cancellingRunIds = this.cancellingRunIds.filter((runId) => commandRuns.some((run) => run.id === runId && isCommandRunPending(run)));
+      this.updateCommandRunPolling(this.hasPendingCommandRuns(commandRuns));
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  private updateCommandRunPolling(shouldPoll: boolean): void {
+    if (shouldPoll && this.commandRunPollTimer === undefined) {
+      this.commandRunPollTimer = window.setInterval(() => { void this.loadCommandRuns(); }, COMMAND_RUN_POLL_INTERVAL_MS);
+      return;
+    }
+    if (!shouldPoll && this.commandRunPollTimer !== undefined) {
+      window.clearInterval(this.commandRunPollTimer);
+      this.commandRunPollTimer = undefined;
+    }
+  }
+
+  private hasPendingCommandRuns(commandRuns = this.commandRuns): boolean {
+    return commandRuns.some(isCommandRunPending);
+  }
+
+  private async cancelCommandRun(run: TerminalCommandRun): Promise<void> {
+    if (!isCommandRunPending(run) || this.cancellingRunIds.includes(run.id)) return;
+    this.error = undefined;
+    this.cancellingRunIds = [...this.cancellingRunIds, run.id];
+    try {
+      await terminalsApi.cancelCommandRun(run.id);
+      await this.loadCommandRuns();
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.cancellingRunIds = this.cancellingRunIds.filter((runId) => runId !== run.id);
+    }
+  }
+
+  private async continueTerminal(id: string): Promise<void> {
+    if (this.workspace === undefined || this.continuingTerminalIds.includes(id)) return;
+    this.error = undefined;
+    this.continuingTerminalIds = [...this.continuingTerminalIds, id];
+    try {
+      const terminal = await terminalsApi.continueTerminal(this.workspace.projectId, this.workspace.id, id);
+      this.terminals = this.terminals.map((item) => item.id === id ? terminal : item);
+      if (this.socket === undefined) this.disposeTerminalView();
+      this.fitAndNotify();
+      this.terminal?.focus();
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.continuingTerminalIds = this.continuingTerminalIds.filter((terminalId) => terminalId !== id);
+    }
+  }
+
   private ensureTerminalView(): void {
     const workspace = this.workspace;
     const terminalHost = this.terminalHostElement();
@@ -230,6 +317,7 @@ export class TerminalPanel extends LitElement {
       if (message.type === "exit") {
         terminal.writeln(`\r\n[process exited${message.exitCode === undefined ? "" : ` with code ${String(message.exitCode)}`}]`);
         this.terminals = this.terminals.map((item) => item.id === terminalId ? { ...item, exited: true, ...(message.exitCode === undefined ? {} : { exitCode: message.exitCode }) } : item);
+        void this.loadCommandRuns();
       }
       if (message.type === "error") terminal.writeln(`\r\n[terminal error: ${message.message}]`);
     } catch (error) {
@@ -301,6 +389,39 @@ export class TerminalPanel extends LitElement {
     this.fitAddon = undefined;
   }
 
+  private renderCommandRunNotice() {
+    const run = this.selectedCommandRun();
+    if (run === undefined) return null;
+    const terminal = this.selectedTerminalInfo();
+    if (isCommandRunPending(run)) {
+      const cancelling = this.cancellingRunIds.includes(run.id);
+      return html`
+        <section class="command-run-notice running">
+          <div>
+            <strong>${run.title}</strong>
+            <p>Command is running. Press <kbd>Ctrl</kbd>+<kbd>C</kbd> or use the button to cancel.</p>
+            <code>${run.command}</code>
+          </div>
+          <button class="danger" ?disabled=${cancelling} @click=${() => { void this.cancelCommandRun(run); }}>${cancelling ? "Cancel sent…" : "Cancel command"}</button>
+        </section>
+      `;
+    }
+    if (terminal?.exited === true) {
+      const continuing = this.continuingTerminalIds.includes(terminal.id);
+      return html`
+        <section class=${`command-run-notice ${run.status}`}>
+          <div>
+            <strong>${commandRunCompletionLabel(run)}</strong>
+            <p>Output is preserved. Continue in a shell to inspect or run follow-up commands.</p>
+            <code>${run.command}</code>
+          </div>
+          <button ?disabled=${continuing} @click=${() => { void this.continueTerminal(terminal.id); }}>${continuing ? "Starting shell…" : "Continue in shell"}</button>
+        </section>
+      `;
+    }
+    return null;
+  }
+
   override render() {
     return html`
       <section class="terminal-shell">
@@ -314,6 +435,7 @@ export class TerminalPanel extends LitElement {
           <button class="new" ?disabled=${this.workspace === undefined} @click=${() => { void this.startTerminal(); }}>+ Shell</button>
         </div>
         ${this.error === undefined ? null : html`<p class="error">${this.error}</p>`}
+        ${this.renderCommandRunNotice()}
         ${this.loading ? html`<p class="muted">Loading terminals…</p>` : null}
         <div class="terminal-host"></div>
       </section>
@@ -330,7 +452,16 @@ export class TerminalPanel extends LitElement {
     button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     button small { color: var(--pi-muted); font-size: 14px; line-height: 1; }
     button small:hover { color: var(--pi-danger); }
+    button.danger { color: var(--pi-danger); }
     button:disabled { opacity: .5; cursor: not-allowed; }
+    .command-run-notice { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--pi-border-muted); background: var(--pi-surface); color: var(--pi-text); }
+    .command-run-notice.running { border-color: var(--pi-warning-border); }
+    .command-run-notice.succeeded { border-color: var(--pi-success-border); }
+    .command-run-notice.failed { border-color: var(--pi-danger); }
+    .command-run-notice p { margin: 3px 0; color: var(--pi-muted); }
+    .command-run-notice code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--pi-text-secondary); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .command-run-notice kbd { border: 1px solid var(--pi-border); border-radius: 4px; background: var(--pi-bg); padding: 0 4px; font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .command-run-notice button { justify-self: end; max-width: none; }
     .terminal-host { flex: 1 1 auto; min-height: 0; padding: 6px; box-sizing: border-box; overflow: hidden; }
     .terminal-host .xterm { height: 100%; cursor: text; position: relative; user-select: none; }
     .terminal-host .xterm.focus, .terminal-host .xterm:focus { outline: none; }
@@ -360,6 +491,15 @@ type ServerTerminalMessage =
   | { type: "output"; data: string; replay?: boolean }
   | { type: "exit"; exitCode?: number }
   | { type: "error"; message: string };
+
+function isCommandRunPending(run: TerminalCommandRun): boolean {
+  return run.status === "queued" || run.status === "running";
+}
+
+function commandRunCompletionLabel(run: TerminalCommandRun): string {
+  if (run.status === "succeeded") return `Command succeeded${run.exitCode === undefined ? "" : ` with exit code ${String(run.exitCode)}`}`;
+  return `Command failed${run.exitCode === undefined ? "" : ` with exit code ${String(run.exitCode)}`}`;
+}
 
 function parseServerMessage(data: string): ServerTerminalMessage {
   const value: unknown = JSON.parse(data);

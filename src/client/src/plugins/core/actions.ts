@@ -1,5 +1,6 @@
 import { isSessionActive } from "../../../../shared/activity";
 import type { AppState } from "../../appState";
+import { isWorkspaceDeletionPending } from "../../workspaceDeletion";
 import type { PluginAction } from "../types";
 
 export function createCoreActions(): PluginAction[] {
@@ -117,6 +118,14 @@ export function createCoreActions(): PluginAction[] {
       run: (context) => context.state.workspaceTool === "core:workspace.git" && context.state.selectedWorkspace?.isGitRepo === true ? context.refreshGit() : context.refreshFiles(),
     },
     {
+      id: "workspace.delete",
+      title: "Delete Workspace",
+      description: "Remove the selected Git worktree",
+      group: "Workspace",
+      enabled: hasDeletableWorkspace,
+      run: (context) => context.deleteWorkspace(),
+    },
+    {
       id: "session.start",
       title: "Start Session",
       shortcut: "mod+enter",
@@ -149,4 +158,9 @@ function hasWorkspace(context: { state: AppState }): boolean {
 
 function hasGitWorkspace(context: { state: AppState }): boolean {
   return context.state.selectedWorkspace?.isGitRepo === true;
+}
+
+function hasDeletableWorkspace(context: { state: AppState }): boolean {
+  const workspace = context.state.selectedWorkspace;
+  return workspace !== undefined && workspace.isGitWorktree && !workspace.isMain && !isWorkspaceDeletionPending(context.state, workspace);
 }

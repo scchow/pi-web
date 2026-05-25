@@ -1,7 +1,8 @@
 import type { Workspace } from "@jmfederico/pi-web/plugin-api";
 import { ACTIONS_CONFIG_PATH, type WorkspaceAction } from "./config.js";
-import { createWorkspaceTerminal, sendTerminalCommand } from "./terminalDispatcher.js";
+import { runWorkspaceActionInTerminal } from "./actionRunner.js";
 import { requestPiWebRender } from "./piWebPrivateUi.js";
+import type { InternalTerminalCommandRunsRuntime } from "./piWebInternal.js";
 import { actionsConfigRefreshHint, actionsConfigUnavailableMessage, loadWorkspaceActionsConfig, type WorkspaceActionsConfigLoadResult } from "./workspaceActionsClient.js";
 
 export const actionsPanelTagName = "pi-web-actions-panel";
@@ -30,6 +31,7 @@ export function actionsPanelBadge(workspace: Workspace): string | number | undef
 class PiWebActionsPanel extends HTMLElement {
   private workspaceValue: Workspace | undefined;
   private openTerminalValue: OpenTerminal | undefined;
+  private terminalCommandRunsValue: InternalTerminalCommandRunsRuntime | undefined;
   private runningActionId: string | undefined;
   private status: { kind: "info" | "success" | "error"; message: string; detail?: string } | undefined;
   private readonly root: ShadowRoot;
@@ -49,6 +51,10 @@ class PiWebActionsPanel extends HTMLElement {
 
   set openTerminal(value: OpenTerminal | undefined) {
     this.openTerminalValue = value;
+  }
+
+  set terminalCommandRuns(value: InternalTerminalCommandRunsRuntime | undefined) {
+    this.terminalCommandRunsValue = value;
   }
 
   connectedCallback(): void {
@@ -104,7 +110,7 @@ class PiWebActionsPanel extends HTMLElement {
     if (state.kind === "unavailable") return `${renderUnavailableState(state)}${this.renderStatus()}`;
     if (state.config.actions.length === 0) return `<p class="muted">No actions are defined in ${escapeHtml(ACTIONS_CONFIG_PATH)}. Add actions to the file, then click Refresh.</p>${this.renderStatus()}`;
     return `
-      <p class="muted">Actions create a new workspace terminal, send the command, then switch to that terminal. Edit ${escapeHtml(ACTIONS_CONFIG_PATH)} and click Refresh to reload.</p>
+      <p class="muted">Actions run in a dedicated workspace terminal, then switch to that terminal. Edit ${escapeHtml(ACTIONS_CONFIG_PATH)} and click Refresh to reload.</p>
       ${renderActionGroups(state.config.actions, this.runningActionId)}
       ${this.renderStatus()}
     `;
@@ -132,24 +138,26 @@ class PiWebActionsPanel extends HTMLElement {
     if (this.runningActionId !== undefined) return;
     if (action.confirm && !window.confirm(`Run ${action.title}?\n\n${action.command}`)) return;
 
+    const terminal = this.terminalCommandRunsValue;
+    if (terminal === undefined) {
+      this.status = { kind: "error", message: "This PI WEB version does not provide terminal command helpers to plugins." };
+      this.render();
+      return;
+    }
+
     this.runningActionId = action.id;
-    this.status = { kind: "info", message: `Creating terminal for ${action.title}…` };
+    this.status = { kind: "info", message: `Starting ${action.title}…` };
     this.render();
 
     try {
-      const terminal = await createWorkspaceTerminal(workspace, action.title);
-      this.status = { kind: "info", message: `Dispatching command to ${terminal.name}…` };
-      this.render();
-
-      await sendTerminalCommand(workspace, terminal.id, action.command);
+      const handle = await runWorkspaceActionInTerminal(terminal, workspace, action);
       this.status = {
         kind: "success",
-        message: `Dispatched to terminal “${terminal.name}”.`,
+        message: `Started terminal command “${handle.run.title}”.`,
         detail: action.command,
       };
       this.runningActionId = undefined;
       this.render();
-      this.openWorkspaceTerminal(terminal.id);
     } catch (error) {
       this.runningActionId = undefined;
       this.status = { kind: "error", message: error instanceof Error ? error.message : String(error) };
@@ -158,6 +166,10 @@ class PiWebActionsPanel extends HTMLElement {
   }
 
   private openWorkspaceTerminal(terminalId?: string): void {
+    if (this.terminalCommandRunsValue !== undefined) {
+      this.terminalCommandRunsValue.open(terminalId === undefined ? undefined : { terminalId });
+      return;
+    }
     if (this.openTerminalValue === undefined) {
       this.status = { kind: "error", message: "This PI WEB version does not provide terminal navigation to plugins." };
       this.render();

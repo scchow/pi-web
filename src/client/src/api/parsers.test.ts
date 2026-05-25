@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCommandResult, parseFileContentResponse, parseFileSuggestion, parseGitStatusResponse, parseMessagePage, parseSessionStatus, parseSlashCommand, parseWorkspaceActivityResponse } from "./parsers";
+import { parseCommandResult, parseFileContentResponse, parseFileSuggestion, parseGitStatusResponse, parseMessagePage, parseSessionStatus, parseSlashCommand, parseTerminalCommandRun, parseTerminalInfo, parseWorkspaceActivityResponse } from "./parsers";
 
 describe("API parsers", () => {
   it("accepts legacy array message pages and paged message responses", () => {
@@ -68,6 +68,61 @@ describe("API parsers", () => {
 
     expect(() => parseFileContentResponse({ encoding: "base64" })).toThrow("Invalid file encoding");
     expect(() => parseFileContentResponse({ ...textFile, mediaType: "video" })).toThrow("Invalid file media type");
+  });
+
+  it("parses terminal info with optional command-run ownership", () => {
+    expect(parseTerminalInfo({
+      id: "t1",
+      cwd: "/repo",
+      name: "Build",
+      createdAt: "now",
+      exited: false,
+      commandRunId: "run1",
+    })).toMatchObject({ id: "t1", commandRunId: "run1" });
+  });
+
+  it("parses terminal command runs", () => {
+    expect(parseTerminalCommandRun({
+      id: "run1",
+      origin: "core",
+      projectId: "p1",
+      workspaceId: "w1",
+      terminalId: "t1",
+      title: "Build",
+      command: "npm run build",
+      status: "succeeded",
+      exitCode: 0,
+      createdAt: "now",
+      startedAt: "then",
+      completedAt: "later",
+      metadata: { "pi.operation": "test" },
+    })).toEqual({
+      id: "run1",
+      origin: "core",
+      projectId: "p1",
+      workspaceId: "w1",
+      terminalId: "t1",
+      title: "Build",
+      command: "npm run build",
+      status: "succeeded",
+      exitCode: 0,
+      createdAt: "now",
+      startedAt: "then",
+      completedAt: "later",
+      metadata: { "pi.operation": "test" },
+    });
+    expect(() => parseTerminalCommandRun({
+      id: "run1",
+      origin: "core",
+      projectId: "p1",
+      workspaceId: "w1",
+      terminalId: "t1",
+      title: "Build",
+      command: "npm run build",
+      status: "done",
+      createdAt: "now",
+      metadata: {},
+    })).toThrow("Invalid terminal command run status");
   });
 
   it("parses command result variants", () => {

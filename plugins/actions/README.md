@@ -2,7 +2,7 @@
 
 Configurable workspace actions for PI WEB.
 
-The plugin adds an **Actions** workspace tab. Actions create a new PI WEB terminal, send the configured shell command, and switch to that terminal so the user can monitor progress or take over.
+The plugin adds an **Actions** workspace tab. Actions run the configured shell command in a dedicated PI WEB terminal and switch to that terminal so the user can monitor progress.
 
 ## Configuration
 
@@ -68,7 +68,7 @@ npm pack --workspace @jmfederico/pi-web-actions --dry-run
 
 ## Beta/private API note
 
-This plugin intentionally dogfoods private PI WEB browser APIs for reading workspace files and creating/writing terminals. Those APIs are not yet stable public plugin APIs, so compatibility is best-effort and may require updates alongside PI WEB releases.
+This first-party plugin dogfoods PI WEB's internal terminal command-run helper for command execution while that API incubates. It also reads `.pi-web/actions.json` through PI WEB's private workspace file endpoint. These internals are not stable public plugin APIs yet, so compatibility is best-effort and may require updates alongside PI WEB releases.
 
 ## Notes
 

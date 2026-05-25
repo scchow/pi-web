@@ -1,10 +1,12 @@
 import { html } from "lit";
 import type { AppState } from "../appState";
 import type { Workspace } from "../api";
-import type { PiWebPluginRegistration, PluginAction, PluginRuntimeContext, QualifiedContributionId, QualifiedPluginAction, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspaceLabelContribution, QualifiedWorkspacePanelContribution, ThemeContribution, ThemePairContribution, WorkspaceLabelContribution, WorkspaceLabelItem, WorkspacePanelContribution } from "./types";
+import type { PiWebPluginRegistration, PluginAction, PluginRuntimeContext, QualifiedContributionId, QualifiedPluginAction, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspaceLabelContribution, QualifiedWorkspacePanelContribution, ThemeContribution, ThemePairContribution, WorkspaceLabelContribution, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelContribution } from "./types";
 
 const idPattern = /^[a-z][a-z0-9.-]*$/u;
 const localIdPattern = /^[a-z][a-z0-9.-]*$/u;
+const pluginRuntimeScopes = new WeakMap<PluginRuntimeContext, (pluginId: string) => PluginRuntimeContext>();
+const workspacePanelScopes = new WeakMap<WorkspacePanelContext, (pluginId: string) => WorkspacePanelContext>();
 
 type RegisteredPluginAction = Omit<PluginAction, "id"> & {
   id: QualifiedContributionId;
@@ -40,13 +42,14 @@ export class PluginRegistry {
 
   getActions(context: PluginRuntimeContext): QualifiedPluginAction[] {
     return this.actions.map((action) => {
-      const enabled = action.enabled?.(context);
+      const scopedContext = pluginRuntimeContextFor(context, action.pluginId);
+      const enabled = action.enabled?.(scopedContext);
       const qualified: QualifiedPluginAction = {
         id: action.id,
         pluginId: action.pluginId,
         localId: action.localId,
         title: action.title,
-        run: () => action.run(context),
+        run: () => action.run(scopedContext),
       };
       if (action.description !== undefined) qualified.description = action.description;
       if (action.shortcut !== undefined) qualified.shortcut = action.shortcut;
@@ -85,7 +88,15 @@ export class PluginRegistry {
 
   private qualifyWorkspacePanel(pluginId: string, panel: WorkspacePanelContribution): QualifiedWorkspacePanelContribution {
     const id = this.qualify(pluginId, panel.id);
-    return { ...panel, id, pluginId, localId: panel.id };
+    const badge = panel.badge;
+    return {
+      ...panel,
+      id,
+      pluginId,
+      localId: panel.id,
+      ...(badge === undefined ? {} : { badge: (context: WorkspacePanelContext) => badge(workspacePanelContextFor(context, pluginId)) }),
+      render: (context: WorkspacePanelContext) => panel.render(workspacePanelContextFor(context, pluginId)),
+    };
   }
 
   private qualifyWorkspaceLabelContribution(pluginId: string, contribution: WorkspaceLabelContribution): QualifiedWorkspaceLabelContribution {
@@ -130,4 +141,22 @@ export class PluginRegistry {
   private validateLocalId(localId: string): void {
     if (!localIdPattern.test(localId)) throw new Error(`Invalid contribution id: ${localId}`);
   }
+}
+
+function pluginRuntimeContextFor(context: PluginRuntimeContext, pluginId: string): PluginRuntimeContext {
+  return pluginRuntimeScopes.get(context)?.(pluginId) ?? context;
+}
+
+function workspacePanelContextFor(context: WorkspacePanelContext, pluginId: string): WorkspacePanelContext {
+  return workspacePanelScopes.get(context)?.(pluginId) ?? context;
+}
+
+export function installPluginRuntimeScope(context: PluginRuntimeContext, scope: (pluginId: string) => PluginRuntimeContext): PluginRuntimeContext {
+  pluginRuntimeScopes.set(context, scope);
+  return context;
+}
+
+export function installWorkspacePanelScope(context: WorkspacePanelContext, scope: (pluginId: string) => WorkspacePanelContext): WorkspacePanelContext {
+  workspacePanelScopes.set(context, scope);
+  return context;
 }
