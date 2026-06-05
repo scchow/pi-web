@@ -1,7 +1,5 @@
 import { html, svg } from "lit";
-import type { AppState } from "../appState";
-import type { Workspace } from "../api";
-import type { PiWebPluginRegistration, PluginAction, PluginMachine, PluginRuntimeContext, QualifiedContributionId, QualifiedPluginAction, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspaceLabelContribution, QualifiedWorkspacePanelContribution, ThemeContribution, ThemePairContribution, WorkspaceLabelContribution, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelContribution } from "./types";
+import type { PiWebPluginRegistration, PluginAction, PluginRuntimeContext, QualifiedContributionId, QualifiedPluginAction, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspaceLabelContribution, QualifiedWorkspacePanelContribution, ThemeContribution, ThemePairContribution, WorkspaceLabelContext, WorkspaceLabelContribution, WorkspaceLabelItem, WorkspacePanelContext, WorkspacePanelContribution } from "./types";
 
 const idPattern = /^[a-z][a-z0-9.-]*$/u;
 const localIdPattern = /^[a-z][a-z0-9.-]*$/u;
@@ -79,8 +77,7 @@ export class PluginRegistry {
     return [...this.themePairs].sort((left, right) => (left.order ?? 1000) - (right.order ?? 1000) || left.name.localeCompare(right.name));
   }
 
-  getWorkspaceLabelItems(state: AppState, workspace: Workspace): WorkspaceLabelItem[] {
-    const context = { machine: pluginMachineFromState(state), state, workspace };
+  getWorkspaceLabelItems(context: WorkspaceLabelContext): WorkspaceLabelItem[] {
     return [...this.workspaceLabels]
       .sort((left, right) => (left.order ?? 1000) - (right.order ?? 1000) || left.id.localeCompare(right.id))
       .flatMap((contribution) => {
@@ -196,10 +193,4 @@ function isHiddenByGatewayPlugin(sourcePluginId: string | undefined, gatewayPlug
 
 function runtimeContextMachineId(context: PluginRuntimeContext): string {
   return context.state.selectedMachine?.id ?? "local";
-}
-
-function pluginMachineFromState(state: Pick<AppState, "selectedMachine">): PluginMachine {
-  const machine = state.selectedMachine;
-  if (machine !== undefined) return { id: machine.id, name: machine.name, kind: machine.kind };
-  return { id: "local", name: "local", kind: "local" };
 }

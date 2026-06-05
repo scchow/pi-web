@@ -596,12 +596,18 @@ interface WorkspaceLabelContext {
   machine: PluginMachine;
   workspace: Workspace;
   state?: PluginRuntimeState;
+  files: {
+    readFile(path: string): Promise<FileContentResponse>;
+  };
+  host: {
+    requestRender(): void;
+  };
 }
 ```
 
-`machine` and `workspace` are documented as stable for label callbacks. Include `machine.id` in any label caches that depend on workspace data.
+`machine`, `workspace`, `files`, and `host` are documented as stable for label callbacks. Include `machine.id` in any label caches that depend on workspace data. Call `host.requestRender()` when async plugin-owned state changes should make PI WEB re-evaluate label `visible` or `items` callbacks.
 
-Items are sorted by `order` and then id. Return an empty array to render nothing.
+Items are sorted by `order` and then id. Return an empty array to render nothing. Keep callbacks synchronous and lightweight; start async work from the callback, return cached items, then call `host.requestRender()` when the cache changes.
 
 #### Text items
 
@@ -661,7 +667,7 @@ export default {
 
 ## Reading workspace files
 
-Workspace panels can read files through the documented `files` helper. PI WEB binds this helper to the panel's machine and workspace, so it works the same for local and federated machines.
+Workspace panels and workspace labels can read files through the documented `files` helper. PI WEB binds this helper to the callback's machine and workspace, so it works the same for local and federated machines.
 
 ```js
 workspacePanels: [
@@ -689,6 +695,51 @@ class MyEnvViewer extends HTMLElement {
     }
   }
 }
+```
+
+Labels should use the same helper through a plugin-owned cache because `items()` itself must return synchronously:
+
+```js
+const envCache = new Map();
+
+function envKey(machine, workspace) {
+  return `${machine.id}:${workspace.id}:docker/development.be-go.local.env`;
+}
+
+function loadEnvLabel(context) {
+  const key = envKey(context.machine, context.workspace);
+  const cached = envCache.get(key);
+  if (cached !== undefined) return cached;
+
+  const pending = { status: "loading", label: undefined };
+  envCache.set(key, pending);
+  context.files.readFile("docker/development.be-go.local.env")
+    .then((file) => {
+      pending.status = "ready";
+      pending.label = file.content.match(/^DEV_URL=(.+)$/m)?.[1];
+      context.host.requestRender();
+    })
+    .catch(() => {
+      pending.status = "missing";
+      context.host.requestRender();
+    });
+  return pending;
+}
+
+workspaceLabels: [
+  {
+    id: "dev-url",
+    items: (context) => {
+      const cached = loadEnvLabel(context);
+      return cached.label === undefined ? [] : [{
+        type: "link",
+        text: cached.label,
+        href: cached.label,
+        target: "_blank",
+      }];
+    },
+  },
+]
 ```
 
 The file response includes fields such as `path`, `content`, `truncated`, and `binary`. Be careful with sensitive files such as `.env`: plugins are trusted browser code, and file contents are exposed to the plugin.

@@ -1,13 +1,13 @@
 import { html } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import type { SessionInfo, Workspace } from "../api";
+import type { FileContentResponse, SessionInfo, Workspace } from "../api";
 import { initialAppState, type AppState } from "../appState";
 import { markCachedNewSessionInfo } from "../cachedNewSessions";
 import { machineScopedPluginId } from "../../../shared/machinePluginIds";
 import { corePlugin } from "./core";
 import { PluginRegistry } from "./registry";
 import { themePackPlugin } from "./themes";
-import type { PluginRuntimeContext, ThemeTokens, WorkspacePanelContext } from "./types";
+import type { PluginRuntimeContext, ThemeTokens, WorkspaceFiles, WorkspaceHost, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext } from "./types";
 
 function createContext(statePatch: Partial<AppState> = {}) {
   const calls: string[] = [];
@@ -286,10 +286,43 @@ describe("PluginRegistry", () => {
       },
     });
 
-    expect(registry.getWorkspaceLabelItems(initialAppState(), workspace)).toEqual([
+    expect(registry.getWorkspaceLabelItems(createWorkspaceLabelContext("local", workspace))).toEqual([
       { type: "link", text: "web", href: "http://localhost:5173" },
       { type: "text", text: "last" },
     ]);
+  });
+
+  it("passes workspace label file and host helpers to callbacks", () => {
+    const registry = new PluginRegistry();
+    const workspace = testWorkspace();
+    const readFile = vi.fn<WorkspaceFiles["readFile"]>(() => Promise.resolve(testFileContent("docker/development.be-go.local.env")));
+    const requestRender = vi.fn<WorkspaceHost["requestRender"]>();
+    const visible = vi.fn<(context: WorkspaceLabelContext) => boolean>(() => true);
+    const items = vi.fn<(context: WorkspaceLabelContext) => WorkspaceLabelItem[]>((context) => {
+      void context.files.readFile("docker/development.be-go.local.env");
+      context.host.requestRender();
+      return [{ type: "text", text: context.machine.id }];
+    });
+    const context = createWorkspaceLabelContext("remote-1", workspace, { files: { readFile }, host: { requestRender } });
+
+    registry.register({
+      id: "example",
+      plugin: {
+        apiVersion: 1,
+        name: "Example",
+        activate: () => ({
+          contributions: {
+            workspaceLabels: [{ id: "env", visible, items }],
+          },
+        }),
+      },
+    });
+
+    expect(registry.getWorkspaceLabelItems(context)).toEqual([{ type: "text", text: "remote-1" }]);
+    expect(visible).toHaveBeenCalledWith(context);
+    expect(items).toHaveBeenCalledWith(context);
+    expect(readFile).toHaveBeenCalledWith("docker/development.be-go.local.env");
+    expect(requestRender).toHaveBeenCalledOnce();
   });
 
   it("only exposes machine-scoped plugin contributions for their machine", () => {
@@ -321,8 +354,8 @@ describe("PluginRegistry", () => {
     expect(panel?.visible?.(createWorkspacePanelContext("local"))).toBe(false);
     expect(panel?.visible?.(createWorkspacePanelContext("remote-1"))).toBe(true);
 
-    expect(registry.getWorkspaceLabelItems(initialAppState(), workspace)).toEqual([]);
-    expect(registry.getWorkspaceLabelItems({ ...initialAppState(), selectedMachine: testMachine("remote-1") }, workspace)).toEqual([{ type: "text", text: "remote" }]);
+    expect(registry.getWorkspaceLabelItems(createWorkspaceLabelContext("local", workspace))).toEqual([]);
+    expect(registry.getWorkspaceLabelItems(createWorkspaceLabelContext("remote-1", workspace))).toEqual([{ type: "text", text: "remote" }]);
     expect(registry.getThemes()).toEqual([]);
   });
 
@@ -371,7 +404,7 @@ describe("PluginRegistry", () => {
     const panels = registry.getWorkspacePanels();
     expect(panels.find((panel) => panel.id === `${remotePluginId}:workspace.remote`)?.visible?.(createWorkspacePanelContext("remote-1"))).toBe(false);
     expect(panels.find((panel) => panel.id === "shared-tools:workspace.gateway")?.visible?.(createWorkspacePanelContext("remote-1"))).toBe(true);
-    expect(registry.getWorkspaceLabelItems({ ...initialAppState(), selectedMachine: testMachine("remote-1") }, workspace)).toEqual([{ type: "text", text: "gateway" }]);
+    expect(registry.getWorkspaceLabelItems(createWorkspaceLabelContext("remote-1", workspace))).toEqual([{ type: "text", text: "gateway" }]);
   });
 
   it("does not activate remote duplicates when the gateway plugin is already registered", () => {
@@ -392,6 +425,18 @@ describe("PluginRegistry", () => {
 
 function testWorkspace(patch: Partial<Workspace> = {}): Workspace {
   return { id: "w1", projectId: "p1", path: "/tmp/project", label: "main", isMain: true, isGitRepo: true, isGitWorktree: false, ...patch };
+}
+
+function createWorkspaceLabelContext(machineId: string, workspace = testWorkspace(), helpers: Partial<Pick<WorkspaceLabelContext, "files" | "host">> = {}): WorkspaceLabelContext {
+  const files: WorkspaceFiles = helpers.files ?? { readFile: vi.fn<WorkspaceFiles["readFile"]>(() => Promise.resolve(testFileContent())) };
+  const host: WorkspaceHost = helpers.host ?? { requestRender: vi.fn<WorkspaceHost["requestRender"]>() };
+  return {
+    machine: { id: machineId, name: machineId, kind: machineId === "local" ? "local" : "remote" },
+    workspace,
+    state: { ...initialAppState(), selectedMachine: testMachine(machineId) },
+    files,
+    host,
+  };
 }
 
 function createWorkspacePanelContext(machineId: string): WorkspacePanelContext {
@@ -422,6 +467,18 @@ function createWorkspacePanelContext(machineId: string): WorkspacePanelContext {
     onRefreshGit: vi.fn(),
     onSelectDiff: vi.fn(),
     onSelectTerminal: vi.fn(),
+  };
+}
+
+function testFileContent(path = "README.md"): FileContentResponse {
+  return {
+    path,
+    encoding: "utf8",
+    size: 0,
+    modifiedAt: "2026-05-20T00:00:00.000Z",
+    content: "",
+    truncated: false,
+    binary: false,
   };
 }
 

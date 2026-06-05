@@ -19,7 +19,7 @@ import { SessionStorageWorkspaceSelectionMemory } from "../controllers/workspace
 import { KeyboardShortcutDispatcher } from "../keyboardShortcuts";
 import { selectedMachineId } from "../controllers/types";
 import { RealtimeSocket } from "../sessionSocket";
-import type { PiWebPluginRegistration, PluginMachine, QualifiedContributionId, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspacePanelContribution, PluginRuntimeContext, TerminalCommandRunsInternalRuntime, WorkspacePanelContext } from "../plugins/types";
+import type { PiWebPluginRegistration, PluginMachine, QualifiedContributionId, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspacePanelContribution, PluginRuntimeContext, TerminalCommandRunsInternalRuntime, WorkspaceFiles, WorkspaceHost, WorkspaceLabelContext, WorkspaceLabelItem, WorkspacePanelContext } from "../plugins/types";
 import { CLASSIC_THEME_ID, DEFAULT_THEME_PREFERENCE, applyPiWebTheme, findThemePairForTheme, readStoredThemePreference, resolveThemePreference, writeStoredThemePreference, type ThemePreference, type ThemePreferenceResolution } from "../theme";
 import { corePlugin } from "../plugins/core";
 import { themePackPlugin } from "../plugins/themes";
@@ -725,7 +725,7 @@ export class PiWebApp extends LitElement {
   private renderWorkspacePanel() {
     const workspace = this.state.selectedWorkspace;
     const panelContext = workspace === undefined ? undefined : this.createWorkspacePanelContext(workspace);
-    const workspaceLabelItems = workspace === undefined ? [] : this.plugins.getWorkspaceLabelItems(this.state, workspace);
+    const workspaceLabelItems = workspace === undefined ? [] : this.workspaceLabelItems(workspace);
     const emptyState = workspace === undefined ? this.workspacePanelEmptyState() : undefined;
     return html`
       <workspace-panel
@@ -802,7 +802,7 @@ export class PiWebApp extends LitElement {
         .projectsCollapsed=${this.mobileNavigation.isCollapsed("projects")}
         .workspacesCollapsed=${this.mobileNavigation.isCollapsed("workspaces")}
         .sessionsCollapsed=${this.mobileNavigation.isCollapsed("sessions")}
-        .workspaceLabelItems=${(workspace: Workspace) => this.plugins.getWorkspaceLabelItems(this.state, workspace)}
+        .workspaceLabelItems=${(workspace: Workspace) => this.workspaceLabelItems(workspace)}
         .refreshControl=${this.appShell.shouldShowAppRefreshInHeader() ? this.renderAppRefresh() : undefined}
         .onShowActions=${() => { this.setState({ actionPaletteOpen: true }); }}
         .onToggleProjects=${() => { this.mobileNavigation.toggle("projects"); }}
@@ -901,6 +901,33 @@ export class PiWebApp extends LitElement {
     }
   }
 
+  private workspaceLabelItems(workspace: Workspace): WorkspaceLabelItem[] {
+    return this.plugins.getWorkspaceLabelItems(this.createWorkspaceLabelContext(workspace));
+  }
+
+  private createWorkspaceLabelContext(workspace: Workspace): WorkspaceLabelContext {
+    const machine = pluginMachineFromState(this.state);
+    return {
+      machine,
+      workspace,
+      state: this.state,
+      files: this.createWorkspaceFiles(workspace, machine.id),
+      host: this.createWorkspaceHost(),
+    };
+  }
+
+  private createWorkspaceFiles(workspace: Workspace, machineId: string): WorkspaceFiles {
+    return {
+      readFile: (path: string) => workspacesApi.workspaceFile(workspace.projectId, workspace.id, path, machineId),
+    };
+  }
+
+  private createWorkspaceHost(): WorkspaceHost {
+    return {
+      requestRender: () => { this.requestUpdate(); },
+    };
+  }
+
   private createWorkspacePanelContext(workspace: Workspace): WorkspacePanelContext {
     const machine = pluginMachineFromState(this.state);
     const machineId = machine.id;
@@ -910,16 +937,12 @@ export class PiWebApp extends LitElement {
         machine,
         workspace,
         state: this.state,
-        files: {
-          readFile: (path: string) => workspacesApi.workspaceFile(workspace.projectId, workspace.id, path, machineId),
-        },
+        files: this.createWorkspaceFiles(workspace, machineId),
         terminal: {
           open: (options) => { void this.openRuntimeTerminal(machineId, workspace, options); },
           runCommand: (input) => terminalCommandRuns.runCommand({ ...input, workspace }),
         },
-        host: {
-          requestRender: () => { this.requestUpdate(); },
-        },
+        host: this.createWorkspaceHost(),
         piWebUnstable: { terminalCommandRuns },
         fileTree: this.state.fileTree,
         expandedDirs: this.state.expandedDirs,
@@ -1353,7 +1376,7 @@ export class PiWebApp extends LitElement {
           ${state.selectedSession ? html`
             <chat-view .sessionId=${state.selectedSession.id} .messages=${state.messages} .messageStart=${state.messagePageStart} .messageEnd=${state.messagePageEnd} .messageTotal=${state.messagePageTotal} .hasMore=${state.messagePageStart > 0} .loadingMore=${state.isLoadingEarlierMessages} .isReceivingPartialStream=${state.isReceivingPartialStream} .isCompacting=${state.status?.isCompacting === true} .pendingMessageCount=${state.status?.pendingMessageCount ?? 0} .status=${state.status} .activity=${state.activity} .onLoadMore=${() => this.withChatPrependTransition(() => this.sessions.loadEarlierMessages())}></chat-view>
             <prompt-editor .sessionId=${state.selectedSession.id} .cwd=${state.selectedWorkspace?.path} .machineId=${selectedMachineId(state)} .disabled=${state.selectedSession.archived === true} .canSteer=${state.status?.isStreaming === true} .isCompacting=${state.status?.isCompacting === true} .canStop=${state.status?.isStreaming === true || state.status?.isBashRunning === true || state.status?.isCompacting === true || (state.status?.pendingMessageCount ?? 0) > 0} .status=${state.status} .onSend=${(text: string, streamingBehavior?: "steer" | "followUp") => { this.sendPrompt(text, streamingBehavior); }} .onStop=${() => this.sessions.stopActiveWork()} .onSelectModel=${() => { void this.openModelDialog(); }} .onSelectThinking=${() => { void this.openThinkingDialog(); }}></prompt-editor>
-            <status-bar .status=${state.status} .machine=${state.selectedMachine} .workspace=${state.selectedWorkspace} .workspaceLabelItems=${state.selectedWorkspace === undefined ? [] : this.plugins.getWorkspaceLabelItems(state, state.selectedWorkspace)}></status-bar>
+            <status-bar .status=${state.status} .machine=${state.selectedMachine} .workspace=${state.selectedWorkspace} .workspaceLabelItems=${state.selectedWorkspace === undefined ? [] : this.workspaceLabelItems(state.selectedWorkspace)}></status-bar>
             ${state.commandDialog !== undefined ? html`<command-picker .title=${state.commandDialog.title} .options=${state.commandDialog.options} .onPick=${(value: string) => this.sessions.respondToCommand(state.commandDialog?.requestId ?? "", value)} .onCancel=${() => { this.sessions.cancelCommand(); }}></command-picker>` : null}
             ${state.modelDialog !== undefined ? html`<command-picker title=${state.modelDialog.title} .searchable=${true} .options=${state.modelDialog.options} .selectedValue=${state.modelDialog.selectedValue} .onPick=${(value: string) => { void this.pickModel(value); }} .onCancel=${() => { this.setState({ modelDialog: undefined }); }}></command-picker>` : null}
             ${state.thinkingDialog !== undefined ? html`<command-picker title=${state.thinkingDialog.title} .options=${state.thinkingDialog.options} .selectedValue=${state.thinkingDialog.selectedValue} .onPick=${(value: string) => { void this.pickThinking(value); }} .onCancel=${() => { this.setState({ thinkingDialog: undefined }); }}></command-picker>` : null}

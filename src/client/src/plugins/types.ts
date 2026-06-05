@@ -47,8 +47,24 @@ export interface PluginMachine {
   kind: Machine["kind"];
 }
 
-export interface WorkspacePanelFiles {
+export interface WorkspaceFiles {
   readFile(path: string): Promise<FileContentResponse>;
+}
+
+export type WorkspacePanelFiles = WorkspaceFiles;
+
+export interface WorkspaceHost {
+  requestRender(): void;
+}
+
+export type WorkspacePanelHost = WorkspaceHost;
+
+export interface WorkspaceContext {
+  machine: PluginMachine;
+  workspace: Workspace;
+  state: AppState;
+  files: WorkspaceFiles;
+  host: WorkspaceHost;
 }
 
 export type WorkspaceTerminalCommandInput = Omit<RunTerminalCommandInput, "workspace">;
@@ -56,10 +72,6 @@ export type WorkspaceTerminalCommandInput = Omit<RunTerminalCommandInput, "works
 export interface WorkspacePanelTerminal {
   open(options?: { terminalId?: string | undefined }): void;
   runCommand(input: WorkspaceTerminalCommandInput): Promise<TerminalCommandRunHandle>;
-}
-
-export interface WorkspacePanelHost {
-  requestRender(): void;
 }
 
 export interface PiWebUnstableRuntimeContext {
@@ -117,13 +129,8 @@ export interface QualifiedPluginAction extends AppAction {
   machineId?: string;
 }
 
-export interface WorkspacePanelContext {
-  machine: PluginMachine;
-  workspace: Workspace;
-  state: AppState;
-  files: WorkspacePanelFiles;
+export interface WorkspacePanelContext extends WorkspaceContext {
   terminal: WorkspacePanelTerminal;
-  host: WorkspacePanelHost;
   piWebUnstable?: Pick<PiWebUnstableRuntimeContext, "terminalCommandRuns">;
   fileTree: FileTreeEntry[];
   expandedDirs: Record<string, FileTreeEntry[]>;
@@ -165,10 +172,12 @@ export interface QualifiedWorkspacePanelContribution extends WorkspacePanelContr
   machineId?: string;
 }
 
-export interface WorkspaceLabelContext {
+export interface WorkspaceLabelContext extends WorkspaceContext {
   machine: PluginMachine;
   workspace: Workspace;
   state: AppState;
+  files: WorkspaceFiles;
+  host: WorkspaceHost;
 }
 
 export type WorkspaceLabelItem = WorkspaceLabelTextItem | WorkspaceLabelLinkItem | WorkspaceLabelRenderItem;
