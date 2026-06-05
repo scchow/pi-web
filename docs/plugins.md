@@ -129,9 +129,29 @@ ln -s /path/to/plugin-folder ~/.pi-web/plugins/plugin-id
 
 Reload the PI WEB browser tab. PI WEB serves plugin modules with an mtime-based `?v=` cache buster. After editing a plugin, hard reload the browser if you do not see changes.
 
+## Remote machine plugins
+
+When machine federation is enabled, PI WEB also loads discovered plugins from the selected remote machine. Remote plugins are trusted browser-side code like local plugins, but their contributions are machine-scoped:
+
+- actions, workspace panels, and workspace labels only appear while that machine is selected;
+- plugin file and terminal helpers run against that machine;
+- plugin code is loaded best-effort through the current gateway and cached for the browser page lifetime;
+- remote theme contributions are ignored for now because themes are app-wide;
+- mixed PI WEB versions across federated machines are best-effort and not guaranteed compatible.
+
+Remote plugin enablement is controlled by the remote machine's PI WEB plugin config. To edit or disable a remote machine plugin, open that machine directly or update its config file.
+
+For portable plugin assets, prefer URLs relative to the plugin module, for example:
+
+```js
+const url = new URL("./asset.json", import.meta.url);
+```
+
+If a remote plugin constructs absolute asset URLs, it should use the `pluginId` from `activate()` because PI WEB gives remote plugins a gateway-scoped runtime id. Hard-coded `/pi-web-plugins/<original-id>/...` URLs may point at the gateway instead of the remote machine.
+
 ## Manage plugins
 
-Open **Settings → Plugins** to review discovered bundled, local, dev, and Pi package plugins. PI WEB can disable any discovered plugin before the browser imports it. Core app contributions such as the built-in command palette, base workspace tools, and themes are not managed through this plugin list.
+Open **Settings → Plugins** to review discovered bundled, local, dev, and Pi package plugins for the PI WEB gateway you opened. PI WEB can disable any discovered gateway plugin before the browser imports it. Core app contributions such as the built-in command palette, base workspace tools, and themes are not managed through this plugin list.
 
 Plugin preferences are stored under the top-level `plugins` config key in the PI WEB config file:
 
@@ -231,7 +251,7 @@ Review task configs before running them, especially in shared projects. Workspac
 
 ## Discovery and packaging
 
-PI WEB builds `/pi-web-plugins/manifest.json` from these sources:
+PI WEB builds the gateway `/pi-web-plugins/manifest.json` from these sources:
 
 1. Bundled plugins in the PI WEB package:
 
@@ -248,6 +268,8 @@ PI WEB builds `/pi-web-plugins/manifest.json` from these sources:
    Entries may be real directories or symlinks. This is the recommended development workflow.
 
 3. Installed Pi packages that expose PI WEB plugin metadata. Pi packages may be user or project scoped.
+
+Remote machines expose their own manifests through the gateway at `/api/machines/<machine-id>/pi-web-plugins/manifest.json`. Those plugin modules are rewritten to gateway-scoped asset URLs and registered under machine-scoped runtime ids so duplicate plugin ids on different machines do not collide.
 
 Plugin package directory names and plugin ids must be valid identifiers:
 

@@ -69,6 +69,7 @@
             <a href="#example">Canonical example</a>
             <a href="#built-in-plugins">Built-in plugins</a>
             <a href="#manage-plugins">Manage plugins</a>
+            <a href="#remote-machine-plugins">Remote machine plugins</a>
             <a href="#production">Production usage</a>
             <a href="#agent-docs">AI-friendly docs</a>
             <a href="#develop">Develop and debug</a>
@@ -258,9 +259,10 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
             <section id="manage-plugins">
               <h2>Manage plugins</h2>
               <p>
-                Open <strong>Settings → Plugins</strong> to review discovered bundled, local, dev, and Pi package plugins.
-                PI WEB can disable any discovered plugin before the browser imports it. Core app contributions such as
-                the command palette, base workspace tools, and themes are not managed through this plugin list.
+                Open <strong>Settings → Plugins</strong> to review discovered bundled, local, dev, and Pi package plugins
+                for the PI WEB gateway you opened. PI WEB can disable any discovered plugin before the browser imports
+                it. Core app contributions such as the command palette, base workspace tools, and themes are not managed
+                through this plugin list.
               </p>
               <div class="code-card">
                 <div class="copy-row">
@@ -287,6 +289,31 @@ After editing, check the manifest endpoint and browser-console failure cases.</c
               <p>
                 After changing plugin enablement, reload the PI WEB browser tab. Already-loaded plugin JavaScript is not
                 unloaded from the current page.
+              </p>
+            </section>
+
+            <section id="remote-machine-plugins">
+              <h2>Remote machine plugins</h2>
+              <p>
+                With machine federation, PI WEB also loads discovered plugins from the selected remote machine. Remote
+                plugins are trusted browser-side code like local plugins, but their actions, workspace panels, and
+                workspace labels only appear while that machine is selected.
+              </p>
+              <ul>
+                <li>File and terminal helpers run against the selected remote machine.</li>
+                <li>Remote plugin code is loaded best-effort through the current gateway and cached for the page lifetime.</li>
+                <li>Remote theme contributions are ignored for now because themes are app-wide.</li>
+                <li>Mixed PI WEB versions across federated machines are best-effort and not guaranteed compatible.</li>
+              </ul>
+              <p>
+                Remote plugin enablement is controlled by the remote machine's PI WEB plugin config. To edit or disable
+                one, open that machine directly or update its config file.
+              </p>
+              <p>
+                For portable plugin assets, prefer URLs relative to the plugin module, such as
+                <code>new URL("./asset.json", import.meta.url)</code>. If a remote plugin constructs absolute asset URLs,
+                it should use the <code>pluginId</code> from <code>activate()</code>; hard-coded
+                <code>/pi-web-plugins/&lt;original-id&gt;/...</code> URLs may point at the gateway instead of the remote machine.
               </p>
             </section>
 

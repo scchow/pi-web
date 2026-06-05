@@ -12,6 +12,7 @@ import { MachineService } from "./machines/machineService.js";
 import { MachineStore } from "./machines/machineStore.js";
 import { WorkspaceService } from "./workspaces/workspaceService.js";
 import type { SessionProxyDaemon } from "./sessiond/sessionProxyRoutes.js";
+import { machineScopedPluginId } from "../shared/machinePluginIds.js";
 import { MAX_IMAGE_PREVIEW_BYTES } from "../shared/workspaceFiles.js";
 import type { Project, Workspace } from "./types.js";
 
@@ -309,6 +310,37 @@ describe("buildApp", () => {
 
     const missingResponse = await app.inject({ method: "GET", url: "/pi-web-plugins/fake/missing.js" });
     expect(missingResponse.statusCode).toBe(404);
+  });
+
+  it("rewrites and proxies remote machine plugin manifests and assets", async () => {
+    const addResponse = await app.inject({ method: "POST", url: "/api/machines", payload: { name: "Remote", baseUrl: "https://remote.example.test/" } });
+    const remote = addResponse.json<{ id: string }>();
+    const requestJson = vi.fn(() => Promise.resolve({
+      statusCode: 200,
+      headers: { "content-type": "application/json" },
+      body: { plugins: [{ id: "remote-tools", module: "/pi-web-plugins/remote-tools/pi-web-plugin.js?v=123", source: "local", scope: "local" }] },
+    }));
+    const request = vi.fn(() => Promise.resolve({
+      statusCode: 200,
+      headers: { "content-type": "application/javascript", "set-cookie": "secret=1" },
+      body: Readable.from(["export default {};"]),
+    }));
+    remoteClient = fakeRemoteClient({ requestJson, request });
+
+    const manifestResponse = await app.inject({ method: "GET", url: `/api/machines/${remote.id}/pi-web-plugins/manifest.json` });
+    const scopedPluginId = machineScopedPluginId(remote.id, "remote-tools");
+    expect(manifestResponse.statusCode).toBe(200);
+    expect(manifestResponse.json()).toEqual({
+      plugins: [{ id: "remote-tools", module: `/pi-web-plugins/${scopedPluginId}/pi-web-plugin.js?v=123`, source: "local", scope: "local" }],
+    });
+    expect(requestJson).toHaveBeenCalledWith("GET", "/pi-web-plugins/manifest.json", undefined, { timeoutMs: 10000 });
+
+    const assetResponse = await app.inject({ method: "GET", url: `/pi-web-plugins/${scopedPluginId}/pi-web-plugin.js?v=123` });
+    expect(assetResponse.statusCode).toBe(200);
+    expect(assetResponse.headers["content-type"]).toContain("application/javascript");
+    expect(assetResponse.headers["set-cookie"]).toBeUndefined();
+    expect(assetResponse.body).toBe("export default {};");
+    expect(request).toHaveBeenCalledWith("GET", "/pi-web-plugins/remote-tools/pi-web-plugin.js?v=123");
   });
 
   it("returns stable errors for invalid project requests", async () => {

@@ -19,7 +19,7 @@ import { SessionStorageWorkspaceSelectionMemory } from "../controllers/workspace
 import { KeyboardShortcutDispatcher } from "../keyboardShortcuts";
 import { selectedMachineId } from "../controllers/types";
 import { RealtimeSocket } from "../sessionSocket";
-import type { PluginMachine, QualifiedContributionId, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspacePanelContribution, PluginRuntimeContext, TerminalCommandRunsInternalRuntime, WorkspacePanelContext } from "../plugins/types";
+import type { PiWebPluginRegistration, PluginMachine, QualifiedContributionId, QualifiedThemeContribution, QualifiedThemePairContribution, QualifiedWorkspacePanelContribution, PluginRuntimeContext, TerminalCommandRunsInternalRuntime, WorkspacePanelContext } from "../plugins/types";
 import { CLASSIC_THEME_ID, DEFAULT_THEME_PREFERENCE, applyPiWebTheme, findThemePairForTheme, readStoredThemePreference, resolveThemePreference, writeStoredThemePreference, type ThemePreference, type ThemePreferenceResolution } from "../theme";
 import { corePlugin } from "../plugins/core";
 import { themePackPlugin } from "../plugins/themes";
@@ -145,6 +145,8 @@ export class PiWebApp extends LitElement {
   private routeRestoreDepth = 0;
   private restoringRouteTerminalId: string | undefined;
   private readonly plugins = createPluginRegistry();
+  private readonly loadedMachinePluginIds = new Set<string>();
+  private readonly machinePluginLoadPromises = new Map<string, Promise<void>>();
   private themePreference: ThemePreference = readStoredThemePreference() ?? DEFAULT_THEME_PREFERENCE;
   @state() private activeThemeId: QualifiedContributionId = CLASSIC_THEME_ID;
   @state() private isRefreshingApp = false;
@@ -331,6 +333,8 @@ export class PiWebApp extends LitElement {
     this.restoringRouteTerminalId = routeSurface.selectedTerminalId;
     try {
       await this.restoreRouteMachine(route, false);
+      const selectedMachinePluginLoad = this.loadPluginsForSelectedMachine();
+      if (route.tool?.startsWith("machine.") === true) await selectedMachinePluginLoad;
       if (!this.isCurrentRouteRestore(restoreSeq)) return;
       this.setState({
         workspaceTool: route.tool ?? this.state.workspaceTool,
@@ -710,6 +714,7 @@ export class PiWebApp extends LitElement {
     this.connectRealtime();
     this.activeTerminalIds.clear();
     this.git.updatePolling();
+    void this.loadPluginsForSelectedMachine();
   }
 
   private refreshSelectedWorkspaceTool(tool: QualifiedContributionId): void {
@@ -945,8 +950,30 @@ export class PiWebApp extends LitElement {
   }
 
   private async loadExternalPlugins(): Promise<void> {
+    await this.registerExternalPlugins("PI WEB plugins", () => loadExternalPlugins());
+  }
+
+  private async loadPluginsForSelectedMachine(): Promise<void> {
+    const machine = this.state.selectedMachine;
+    if (machine?.kind !== "remote") return;
+    await this.loadPluginsForMachine(machine);
+  }
+
+  private async loadPluginsForMachine(machine: Machine): Promise<void> {
+    if (machine.kind !== "remote" || this.loadedMachinePluginIds.has(machine.id)) return;
+    const existing = this.machinePluginLoadPromises.get(machine.id);
+    if (existing !== undefined) return existing;
+
+    const load = this.registerExternalPlugins(`PI WEB plugins from ${machine.name}`, () => loadExternalPlugins(`/api/machines/${encodeURIComponent(machine.id)}/pi-web-plugins/manifest.json`, { machineId: machine.id }))
+      .then((loaded) => { if (loaded) this.loadedMachinePluginIds.add(machine.id); })
+      .finally(() => { this.machinePluginLoadPromises.delete(machine.id); });
+    this.machinePluginLoadPromises.set(machine.id, load);
+    await load;
+  }
+
+  private async registerExternalPlugins(label: string, load: () => Promise<PiWebPluginRegistration[]>): Promise<boolean> {
     try {
-      const registrations = await loadExternalPlugins();
+      const registrations = await load();
       for (const registration of registrations) {
         try {
           this.plugins.register(registration);
@@ -956,8 +983,10 @@ export class PiWebApp extends LitElement {
       }
       this.applyPreferredTheme(false);
       this.requestUpdate();
+      return true;
     } catch (error) {
-      console.warn("Failed to load external PI WEB plugins", error);
+      console.warn(`Failed to load ${label}`, error);
+      return false;
     }
   }
 

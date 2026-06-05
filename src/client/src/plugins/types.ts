@@ -12,6 +12,8 @@ export type SvgTemplateTag = (strings: TemplateStringsArray, ...values: unknown[
 export interface PiWebPluginRegistration {
   id: PluginId;
   plugin: PiWebPlugin;
+  machineId?: string;
+  sourcePluginId?: PluginId;
 }
 
 export interface PiWebPlugin {
@@ -112,6 +114,7 @@ export interface PluginAction {
 export interface QualifiedPluginAction extends AppAction {
   pluginId: PluginId;
   localId: LocalContributionId;
+  machineId?: string;
 }
 
 export interface WorkspacePanelContext {
@@ -159,6 +162,7 @@ export interface QualifiedWorkspacePanelContribution extends WorkspacePanelContr
   id: QualifiedContributionId;
   pluginId: PluginId;
   localId: LocalContributionId;
+  machineId?: string;
 }
 
 export interface WorkspaceLabelContext {
@@ -272,4 +276,5 @@ export interface QualifiedWorkspaceLabelContribution extends WorkspaceLabelContr
   id: QualifiedContributionId;
   pluginId: PluginId;
   localId: LocalContributionId;
+  machineId?: string;
 }

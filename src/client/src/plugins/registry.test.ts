@@ -1,11 +1,13 @@
+import { html } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionInfo, Workspace } from "../api";
 import { initialAppState, type AppState } from "../appState";
 import { markCachedNewSessionInfo } from "../cachedNewSessions";
+import { machineScopedPluginId } from "../../../shared/machinePluginIds";
 import { corePlugin } from "./core";
 import { PluginRegistry } from "./registry";
 import { themePackPlugin } from "./themes";
-import type { PluginRuntimeContext, ThemeTokens } from "./types";
+import type { PluginRuntimeContext, ThemeTokens, WorkspacePanelContext } from "./types";
 
 function createContext(statePatch: Partial<AppState> = {}) {
   const calls: string[] = [];
@@ -289,10 +291,79 @@ describe("PluginRegistry", () => {
       { type: "text", text: "last" },
     ]);
   });
+
+  it("only exposes machine-scoped plugin contributions for their machine", () => {
+    const registry = new PluginRegistry();
+    const pluginId = machineScopedPluginId("remote-1", "project-tools");
+    const workspace = testWorkspace();
+    registry.register({
+      id: pluginId,
+      machineId: "remote-1",
+      sourcePluginId: "project-tools",
+      plugin: {
+        apiVersion: 1,
+        name: "Project Tools",
+        activate: () => ({
+          contributions: {
+            actions: [{ id: "do-thing", title: "Do Thing", run: () => undefined }],
+            workspacePanels: [{ id: "workspace.tools", title: "Tools", render: () => html`<p>Tools</p>` }],
+            workspaceLabels: [{ id: "badge", items: () => [{ type: "text", text: "remote" }] }],
+            themes: [{ id: "remote-theme", name: "Remote Theme", colorScheme: "dark", tokens: testThemeTokens() }],
+          },
+        }),
+      },
+    });
+
+    expect(registry.getActions(createContext().context).map((action) => action.id)).not.toContain(`${pluginId}:do-thing`);
+    expect(registry.getActions(createContext({ selectedMachine: testMachine("remote-1") }).context).map((action) => action.id)).toContain(`${pluginId}:do-thing`);
+
+    const panel = registry.getWorkspacePanels().find((candidate) => candidate.id === `${pluginId}:workspace.tools`);
+    expect(panel?.visible?.(createWorkspacePanelContext("local"))).toBe(false);
+    expect(panel?.visible?.(createWorkspacePanelContext("remote-1"))).toBe(true);
+
+    expect(registry.getWorkspaceLabelItems(initialAppState(), workspace)).toEqual([]);
+    expect(registry.getWorkspaceLabelItems({ ...initialAppState(), selectedMachine: testMachine("remote-1") }, workspace)).toEqual([{ type: "text", text: "remote" }]);
+    expect(registry.getThemes()).toEqual([]);
+  });
 });
 
 function testWorkspace(patch: Partial<Workspace> = {}): Workspace {
   return { id: "w1", projectId: "p1", path: "/tmp/project", label: "main", isMain: true, isGitRepo: true, isGitWorktree: false, ...patch };
+}
+
+function createWorkspacePanelContext(machineId: string): WorkspacePanelContext {
+  const workspace = testWorkspace();
+  return {
+    machine: { id: machineId, name: machineId, kind: machineId === "local" ? "local" : "remote" },
+    workspace,
+    state: { ...initialAppState(), selectedMachine: testMachine(machineId) },
+    files: { readFile: vi.fn() },
+    terminal: { open: vi.fn(), runCommand: vi.fn() },
+    host: { requestRender: vi.fn() },
+    fileTree: [],
+    expandedDirs: {},
+    selectedFilePath: undefined,
+    selectedFileContent: undefined,
+    fileTreeStale: false,
+    gitStatus: undefined,
+    selectedDiffPath: undefined,
+    selectedDiff: undefined,
+    selectedStagedDiff: undefined,
+    gitStale: false,
+    activeTerminalCount: 0,
+    selectedTerminalId: undefined,
+    terminalAutoStart: false,
+    onRefreshFiles: vi.fn(),
+    onExpandDir: vi.fn(),
+    onSelectFile: vi.fn(),
+    onRefreshGit: vi.fn(),
+    onSelectDiff: vi.fn(),
+    onSelectTerminal: vi.fn(),
+  };
+}
+
+function testMachine(id: string) {
+  return { id, name: id, kind: id === "local" ? "local" as const : "remote" as const, createdAt: "2026-05-20T00:00:00.000Z", updatedAt: "2026-05-20T00:00:00.000Z" };
 }
 
 function testSession(patch: Partial<SessionInfo> = {}): SessionInfo {

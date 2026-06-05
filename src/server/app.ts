@@ -21,6 +21,7 @@ import { getPiWebStatus, getPiWebVersionStatus } from "./piWebStatus.js";
 import { MachineService } from "./machines/machineService.js";
 import { registerMachineRoutes } from "./machines/machineRoutes.js";
 import { registerMachineProxyRoutes } from "./machines/machineProxyRoutes.js";
+import { proxyMachinePluginAsset, registerMachinePluginProxyRoutes } from "./machines/machinePluginProxyRoutes.js";
 
 export interface AppDependencies {
   projects?: ProjectService;
@@ -96,6 +97,8 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   app.get("/pi-web-plugins/manifest.json", async () => piWebPlugins.manifest());
 
   app.get<{ Params: { pluginId: string; "*": string } }>("/pi-web-plugins/:pluginId/*", async (request, reply) => {
+    if (await proxyMachinePluginAsset(machines, request.params.pluginId, request.params["*"], request.url, reply)) return;
+
     const asset = await piWebPlugins.readAsset(request.params.pluginId, request.params["*"]);
     if (asset === undefined) return reply.code(404).send({ error: "Plugin asset not found" });
     return reply.type(asset.contentType).send(asset.content);
@@ -107,6 +110,7 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   registerConfigRoutes(app, deps.config);
 
   registerMachineRoutes(app, machines);
+  registerMachinePluginProxyRoutes(app, machines);
 
   registerLocalProjectRoutes(app, projects, workspaces, "/api");
   registerLocalProjectRoutes(app, projects, workspaces, "/api/machines/local");
