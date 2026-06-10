@@ -164,6 +164,27 @@ describe("PiSessionService", () => {
     expect(fake.calls.dispose).toBe(1);
   });
 
+  it("opens legacy id-only lookups from the default session store gateway", async () => {
+    const hub = new CapturingSessionEventHub();
+    const fake = fakeRuntime("legacy-session");
+    const open = vi.fn(() => fakeSessionManager());
+    const service = new PiSessionService(hub, {
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: {
+        create: () => fakeSessionManager(),
+        list: () => Promise.resolve([]),
+        listAll: () => Promise.resolve([sessionRecord("legacy-session")]),
+        open,
+      },
+      heartbeatIntervalMs: 60_000,
+    });
+
+    await expect(service.status("legacy")).resolves.toMatchObject({ sessionId: "legacy-session" });
+    expect(open).toHaveBeenCalledWith("/sessions/legacy-session.jsonl");
+
+    await service.dispose();
+  });
+
   it("binds extensions again when the SDK runtime replaces the active session", async () => {
     const hub = new CapturingSessionEventHub();
     const fake = fakeRuntime("session-1");

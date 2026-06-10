@@ -60,6 +60,16 @@ describe("SessionDirResolver", () => {
 });
 
 describe("Pi session manager gateway", () => {
+  it("lists legacy id-only sessions from the default Pi session store", async () => {
+    const otherCwd = join(tempDir, "other-workspace");
+    await writeSessionFile(defaultPiSessionDir(cwd, agentDir), "session-a", cwd);
+    await writeSessionFile(defaultPiSessionDir(otherCwd, agentDir), "session-b", otherCwd);
+    const gateway = createPiSessionManagerGateway({ agentDir, env: {} });
+
+    if (gateway.listAll === undefined) throw new Error("Expected legacy listing support");
+    await expect(gateway.listAll()).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ id: "session-a", cwd }), expect.objectContaining({ id: "session-b", cwd: otherCwd })]));
+  });
+
   it("lists only sessions for the requested cwd when a custom Pi sessionDir is shared", async () => {
     const sharedSessionDir = join(tempDir, "shared-sessions");
     const otherCwd = join(tempDir, "other-workspace");

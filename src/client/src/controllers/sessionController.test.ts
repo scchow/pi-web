@@ -181,10 +181,10 @@ describe("SessionController", () => {
       ...defaultApi,
       startSession: () => Promise.resolve(replacementSession),
       messages: (session) => {
-        if (session.id === oldSession.id) return Promise.reject(new Error("Session not found"));
+        if (sessionLookupId(session) === oldSession.id) return Promise.reject(new Error("Session not found"));
         return Promise.resolve(emptyPage);
       },
-      status: (session) => Promise.resolve(status(session.id)),
+      status: (session) => Promise.resolve(status(sessionLookupId(session))),
     };
     const controller = new SessionController(
       () => state,
@@ -221,7 +221,7 @@ describe("SessionController", () => {
       ...defaultApi,
       respondToCommand: () => Promise.resolve({ type: "done", message: "Session forked", session: replacementSession, promptDraft: "fork me" }),
       messages: () => Promise.resolve(emptyPage),
-      status: (session) => Promise.resolve(status(session.id)),
+      status: (session) => Promise.resolve(status(sessionLookupId(session))),
     };
     const controller = new SessionController(
       () => state,
@@ -244,7 +244,7 @@ describe("SessionController", () => {
       ...defaultApi,
       archive: () => Promise.resolve({ archived: true }),
       messages: () => Promise.resolve(emptyPage),
-      status: (session) => Promise.resolve(status(session.id)),
+      status: (session) => Promise.resolve(status(sessionLookupId(session))),
     };
     const controller = new SessionController(
       () => state,
@@ -273,7 +273,7 @@ describe("SessionController", () => {
       ...defaultApi,
       archiveWithDescendants: () => Promise.resolve({ archived: true, sessionIds: [oldSession.id, childSession.id], archivedCount: 2, skippedAlreadyArchivedCount: 0 }),
       messages: () => Promise.resolve(emptyPage),
-      status: (session) => Promise.resolve(status(session.id)),
+      status: (session) => Promise.resolve(status(sessionLookupId(session))),
     };
     const controller = new SessionController(
       () => state,
@@ -299,11 +299,11 @@ describe("SessionController", () => {
     const api: typeof defaultApi = {
       ...defaultApi,
       archive: (session) => {
-        archivedIds.push(session.id);
+        archivedIds.push(sessionLookupId(session));
         return Promise.resolve({ archived: true });
       },
       messages: () => Promise.resolve(emptyPage),
-      status: (session) => Promise.resolve(status(session.id)),
+      status: (session) => Promise.resolve(status(sessionLookupId(session))),
     };
     const controller = new SessionController(
       () => state,
@@ -336,11 +336,11 @@ describe("SessionController", () => {
     const api: typeof defaultApi = {
       ...defaultApi,
       deleteArchived: (session) => {
-        deletedIds.push(session.id);
+        deletedIds.push(sessionLookupId(session));
         return Promise.resolve({ deleted: true });
       },
       messages: () => Promise.resolve(emptyPage),
-      status: (session) => Promise.resolve(status(session.id)),
+      status: (session) => Promise.resolve(status(sessionLookupId(session))),
     };
     const controller = new SessionController(
       () => state,
@@ -364,7 +364,7 @@ describe("SessionController", () => {
     const api: typeof defaultApi = {
       ...defaultApi,
       deleteArchived: (session) => {
-        deletedIds.push(session.id);
+        deletedIds.push(sessionLookupId(session));
         return Promise.resolve({ deleted: true });
       },
     };
@@ -412,4 +412,8 @@ describe("SessionController", () => {
 
 function sessionKey(sessionId: string): string {
   return machineSessionKey("local", sessionId);
+}
+
+function sessionLookupId(session: string | SessionRef): string {
+  return typeof session === "string" ? session : session.id;
 }

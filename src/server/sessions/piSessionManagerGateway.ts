@@ -1,3 +1,5 @@
+import type { Dirent } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { getAgentDir, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -25,6 +27,10 @@ export class SessionDirResolver {
   constructor(options: SessionDirResolverOptions = {}) {
     this.agentDir = options.agentDir ?? getAgentDir();
     this.env = options.env ?? process.env;
+  }
+
+  defaultSessionsRoot(): string {
+    return defaultPiSessionsRoot(this.agentDir);
   }
 
   resolve(cwd: string): SessionDirResolution {
@@ -61,6 +67,10 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
     return SessionManager.create(cwd, resolution.sessionDir);
   }
 
+  listAll(): Promise<PiSessionListEntry[]> {
+    return listSessionsInDefaultPiStore(this.resolver.defaultSessionsRoot());
+  }
+
   open(path: string): PiSessionManager {
     return SessionManager.open(path, dirname(path));
   }
@@ -68,6 +78,19 @@ class SettingsAwarePiSessionManagerGateway implements PiSessionManagerGateway {
 
 export async function listSessionsInDir(sessionDir: string): Promise<PiSessionListEntry[]> {
   return SessionManager.list("", sessionDir);
+}
+
+export async function listSessionsInDefaultPiStore(storeRoot = defaultPiSessionsRoot()): Promise<PiSessionListEntry[]> {
+  let entries: Dirent[];
+  try {
+    entries = await readdir(storeRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const sessionDirs = entries.filter((entry) => entry.isDirectory()).map((entry) => join(storeRoot, entry.name));
+  const sessions = (await Promise.all(sessionDirs.map((dir) => listSessionsInDir(dir)))).flat();
+  return sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 }
 
 export function filterSessionsForCwd(sessions: readonly PiSessionListEntry[], cwd: string): PiSessionListEntry[] {
@@ -97,4 +120,3 @@ function expandTildePath(path: string): string {
   if (path.startsWith("~/")) return join(homedir(), path.slice(2));
   return path;
 }
-

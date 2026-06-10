@@ -42,17 +42,40 @@ import { machineGitDiffUrl, messageUrl } from "./urls";
 
 const machinePrefix = (machineId = "local") => `/api/machines/${encodeURIComponent(machineId)}`;
 
-function sessionBaseUrl(session: SessionRef, machineId = "local"): string {
-  return `${machinePrefix(machineId)}/sessions/${encodeURIComponent(session.id)}`;
+type SessionLookup = SessionRef | string;
+
+function sessionId(session: SessionLookup): string {
+  return typeof session === "string" ? session : session.id;
 }
 
-function sessionUrl(session: SessionRef, endpoint: string, machineId = "local"): string {
+function sessionCwd(session: SessionLookup): string | undefined {
+  return typeof session === "string" ? undefined : session.cwd;
+}
+
+function sessionBaseUrl(session: SessionLookup, machineId = "local"): string {
+  return `${machinePrefix(machineId)}/sessions/${encodeURIComponent(sessionId(session))}`;
+}
+
+function sessionUrl(session: SessionLookup, endpoint: string, machineId = "local"): string {
   return `${sessionBaseUrl(session, machineId)}/${endpoint}`;
 }
 
-function sessionQueryUrl(session: SessionRef, endpoint: string, machineId = "local"): string {
-  const query = new URLSearchParams({ cwd: session.cwd }).toString();
-  return `${sessionUrl(session, endpoint, machineId)}?${query}`;
+function sessionQueryUrl(session: SessionLookup, endpoint: string, machineId = "local"): string {
+  return `${sessionUrl(session, endpoint, machineId)}${sessionQuery(session)}`;
+}
+
+function sessionBaseQueryUrl(session: SessionLookup, machineId = "local"): string {
+  return `${sessionBaseUrl(session, machineId)}${sessionQuery(session)}`;
+}
+
+function sessionQuery(session: SessionLookup): string {
+  const cwd = sessionCwd(session);
+  return cwd === undefined || cwd === "" ? "" : `?${new URLSearchParams({ cwd }).toString()}`;
+}
+
+function sessionBody(session: SessionLookup, fields: Record<string, unknown> = {}): string {
+  const cwd = sessionCwd(session);
+  return JSON.stringify(cwd === undefined || cwd === "" ? fields : { cwd, ...fields });
 }
 
 export const piWebApi = {
@@ -98,26 +121,26 @@ export const workspacesApi = {
 export const sessionsApi = {
   sessions: (cwd: string, machineId = "local") => request(`${machinePrefix(machineId)}/sessions?cwd=${encodeURIComponent(cwd)}`, arrayOf(parseSessionInfo)),
   startSession: (cwd: string, machineId = "local") => request(`${machinePrefix(machineId)}/sessions`, parseSessionInfo, { method: "POST", body: JSON.stringify({ cwd }) }),
-  messages: (session: SessionRef, options?: { limit?: number; before?: number }, machineId = "local") => request(messageUrl(session, options, machineId), parseMessagePage),
-  status: (session: SessionRef, machineId = "local") => request(sessionQueryUrl(session, "status", machineId), parseSessionStatus),
-  models: (session: SessionRef, machineId = "local") => request(sessionQueryUrl(session, "models", machineId), parseModelSelectionResponse),
-  setModel: (session: SessionRef, provider: string, modelId: string, machineId = "local") => request(sessionUrl(session, "model", machineId), parseSessionStatus, { method: "POST", body: JSON.stringify({ cwd: session.cwd, provider, modelId }) }),
-  cycleModel: (session: SessionRef, direction: "forward" | "backward", machineId = "local") => request(sessionUrl(session, "model/cycle", machineId), parseSessionStatus, { method: "POST", body: JSON.stringify({ cwd: session.cwd, direction }) }),
-  thinkingLevels: (session: SessionRef, machineId = "local") => request(sessionQueryUrl(session, "thinking-levels", machineId), parseThinkingLevelsResponse),
-  setThinkingLevel: (session: SessionRef, level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh", machineId = "local") => request(sessionUrl(session, "thinking-level", machineId), parseSessionStatus, { method: "POST", body: JSON.stringify({ cwd: session.cwd, level }) }),
-  cycleThinkingLevel: (session: SessionRef, machineId = "local") => request(sessionUrl(session, "thinking-level/cycle", machineId), parseSessionStatus, { method: "POST", body: JSON.stringify({ cwd: session.cwd }) }),
-  commands: (session: SessionRef, machineId = "local") => request(sessionQueryUrl(session, "commands", machineId), arrayOf(parseSlashCommand)),
-  prompt: (session: SessionRef, text: string, streamingBehavior?: "steer" | "followUp", machineId = "local") => request(sessionUrl(session, "prompt", machineId), parseAccepted, { method: "POST", body: JSON.stringify(streamingBehavior === undefined ? { cwd: session.cwd, text } : { cwd: session.cwd, text, streamingBehavior }) }),
-  shell: (session: SessionRef, text: string, machineId = "local") => request(sessionUrl(session, "shell", machineId), parseAccepted, { method: "POST", body: JSON.stringify({ cwd: session.cwd, text }) }),
-  runCommand: (session: SessionRef, text: string, machineId = "local") => request(sessionUrl(session, "commands/run", machineId), parseCommandResult, { method: "POST", body: JSON.stringify({ cwd: session.cwd, text }) }),
-  respondToCommand: (session: SessionRef, requestId: string, value: string, machineId = "local") => request(sessionUrl(session, "commands/respond", machineId), parseCommandResult, { method: "POST", body: JSON.stringify({ cwd: session.cwd, requestId, value }) }),
-  abort: (session: SessionRef, machineId = "local") => request(sessionUrl(session, "abort", machineId), parseAborted, { method: "POST", body: JSON.stringify({ cwd: session.cwd }) }),
-  stop: (session: SessionRef, machineId = "local") => request(sessionUrl(session, "stop", machineId), parseStopped, { method: "POST", body: JSON.stringify({ cwd: session.cwd }) }),
-  archive: (session: SessionRef, machineId = "local") => request(sessionUrl(session, "archive", machineId), parseArchived, { method: "POST", body: JSON.stringify({ cwd: session.cwd }) }),
-  archiveWithDescendants: (session: SessionRef, machineId = "local") => request(sessionUrl(session, "archive-tree", machineId), parseArchived, { method: "POST", body: JSON.stringify({ cwd: session.cwd }) }),
-  restore: (session: SessionRef, machineId = "local") => request(sessionUrl(session, "restore", machineId), parseRestored, { method: "POST", body: JSON.stringify({ cwd: session.cwd }) }),
-  deleteArchived: (session: SessionRef, machineId = "local") => request(`${sessionBaseUrl(session, machineId)}?${new URLSearchParams({ cwd: session.cwd }).toString()}`, parseDeleted, { method: "DELETE" }),
-  detachParent: (session: SessionRef, machineId = "local") => request(sessionUrl(session, "detach-parent", machineId), parseDetached, { method: "POST", body: JSON.stringify({ cwd: session.cwd }) }),
+  messages: (session: SessionLookup, options?: { limit?: number; before?: number }, machineId = "local") => request(messageUrl(session, options, machineId), parseMessagePage),
+  status: (session: SessionLookup, machineId = "local") => request(sessionQueryUrl(session, "status", machineId), parseSessionStatus),
+  models: (session: SessionLookup, machineId = "local") => request(sessionQueryUrl(session, "models", machineId), parseModelSelectionResponse),
+  setModel: (session: SessionLookup, provider: string, modelId: string, machineId = "local") => request(sessionUrl(session, "model", machineId), parseSessionStatus, { method: "POST", body: sessionBody(session, { provider, modelId }) }),
+  cycleModel: (session: SessionLookup, direction: "forward" | "backward", machineId = "local") => request(sessionUrl(session, "model/cycle", machineId), parseSessionStatus, { method: "POST", body: sessionBody(session, { direction }) }),
+  thinkingLevels: (session: SessionLookup, machineId = "local") => request(sessionQueryUrl(session, "thinking-levels", machineId), parseThinkingLevelsResponse),
+  setThinkingLevel: (session: SessionLookup, level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh", machineId = "local") => request(sessionUrl(session, "thinking-level", machineId), parseSessionStatus, { method: "POST", body: sessionBody(session, { level }) }),
+  cycleThinkingLevel: (session: SessionLookup, machineId = "local") => request(sessionUrl(session, "thinking-level/cycle", machineId), parseSessionStatus, { method: "POST", body: sessionBody(session) }),
+  commands: (session: SessionLookup, machineId = "local") => request(sessionQueryUrl(session, "commands", machineId), arrayOf(parseSlashCommand)),
+  prompt: (session: SessionLookup, text: string, streamingBehavior?: "steer" | "followUp", machineId = "local") => request(sessionUrl(session, "prompt", machineId), parseAccepted, { method: "POST", body: sessionBody(session, streamingBehavior === undefined ? { text } : { text, streamingBehavior }) }),
+  shell: (session: SessionLookup, text: string, machineId = "local") => request(sessionUrl(session, "shell", machineId), parseAccepted, { method: "POST", body: sessionBody(session, { text }) }),
+  runCommand: (session: SessionLookup, text: string, machineId = "local") => request(sessionUrl(session, "commands/run", machineId), parseCommandResult, { method: "POST", body: sessionBody(session, { text }) }),
+  respondToCommand: (session: SessionLookup, requestId: string, value: string, machineId = "local") => request(sessionUrl(session, "commands/respond", machineId), parseCommandResult, { method: "POST", body: sessionBody(session, { requestId, value }) }),
+  abort: (session: SessionLookup, machineId = "local") => request(sessionUrl(session, "abort", machineId), parseAborted, { method: "POST", body: sessionBody(session) }),
+  stop: (session: SessionLookup, machineId = "local") => request(sessionUrl(session, "stop", machineId), parseStopped, { method: "POST", body: sessionBody(session) }),
+  archive: (session: SessionLookup, machineId = "local") => request(sessionUrl(session, "archive", machineId), parseArchived, { method: "POST", body: sessionBody(session) }),
+  archiveWithDescendants: (session: SessionLookup, machineId = "local") => request(sessionUrl(session, "archive-tree", machineId), parseArchived, { method: "POST", body: sessionBody(session) }),
+  restore: (session: SessionLookup, machineId = "local") => request(sessionUrl(session, "restore", machineId), parseRestored, { method: "POST", body: sessionBody(session) }),
+  deleteArchived: (session: SessionLookup, machineId = "local") => request(sessionBaseQueryUrl(session, machineId), parseDeleted, { method: "DELETE" }),
+  detachParent: (session: SessionLookup, machineId = "local") => request(sessionUrl(session, "detach-parent", machineId), parseDetached, { method: "POST", body: sessionBody(session) }),
   authProviders: (options?: { mode?: "login" | "logout"; authType?: "oauth" | "api_key"; machineId?: string }) => {
     const params = new URLSearchParams();
     if (options?.mode !== undefined) params.set("mode", options.mode);

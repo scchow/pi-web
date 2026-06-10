@@ -103,6 +103,12 @@ export interface PiSessionManager {
 export interface PiSessionManagerGateway {
   list(cwd: string): Promise<PiSessionListEntry[]>;
   create(cwd: string): PiSessionManager;
+  /**
+   * Legacy id-only lookup surface for older clients. This intentionally searches
+   * only Pi's default session store, because custom session directories require
+   * a cwd-scoped lookup.
+   */
+  listAll?(): Promise<PiSessionListEntry[]>;
   open(path: string): PiSessionManager;
 }
 
@@ -671,8 +677,9 @@ export class PiSessionService {
     const archived = await this.getArchived(ref);
     if (archived?.archivePath !== undefined) return this.create(this.sessionManager.open(archived.archivePath), archived.cwd);
 
-    if (!isPiSessionRef(ref)) throw new Error("Session not found");
-    const match = (await this.sessionManager.list(ref.cwd)).find((s) => s.id === ref.id || s.id.startsWith(ref.id));
+    const match = isPiSessionRef(ref)
+      ? (await this.sessionManager.list(ref.cwd)).find((s) => s.id === ref.id || s.id.startsWith(ref.id))
+      : (await this.sessionManager.listAll?.() ?? []).find((s) => s.id === ref || s.id.startsWith(ref));
     if (!match) throw new Error("Session not found");
     return this.create(this.sessionManager.open(match.path), match.cwd);
   }

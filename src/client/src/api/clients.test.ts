@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import type { TerminalCommandRun, Workspace } from "../../../shared/apiTypes";
-import { machinesApi, piWebApi, terminalsApi, workspacesApi } from "./clients";
+import { machinesApi, piWebApi, sessionsApi, terminalsApi, workspacesApi } from "./clients";
 
 const workspace: Workspace = {
   id: "w/1",
@@ -57,6 +57,30 @@ describe("machine-scoped runtime API", () => {
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchCall(fetchMock, 0)[0]).toBe("/api/machines/remote%20a/runtime");
+  });
+});
+
+describe("session API compatibility", () => {
+  it("keeps legacy session-id calls free of cwd context", async () => {
+    const fetchMock = stubJsonFetch({ accepted: true });
+
+    await sessionsApi.prompt("s 1", "hello", "followUp", "remote a");
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchCall(fetchMock, 0);
+    expect(url).toBe("/api/machines/remote%20a/sessions/s%201/prompt");
+    expect(JSON.parse(requestBody(init))).toEqual({ text: "hello", streamingBehavior: "followUp" });
+  });
+
+  it("adds cwd context when session refs include a workspace", async () => {
+    const fetchMock = stubJsonFetch({ accepted: true });
+
+    await sessionsApi.prompt({ id: "s 1", cwd: "/repo" }, "hello", undefined, "remote a");
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchCall(fetchMock, 0);
+    expect(url).toBe("/api/machines/remote%20a/sessions/s%201/prompt");
+    expect(JSON.parse(requestBody(init))).toEqual({ cwd: "/repo", text: "hello" });
   });
 });
 
