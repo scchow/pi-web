@@ -143,9 +143,7 @@ export class SessionController {
       const [page, status] = await Promise.all([this.api.messages(session, { limit: MESSAGE_PAGE_SIZE }, selectedMachineId(this.getState())), this.api.status(session, selectedMachineId(this.getState()))]);
       if (seq !== this.selectionSeq || this.getState().selectedSession?.id !== session.id) return;
       const history = this.transcripts.mergeHistory(transcriptKey, page);
-      const isReceivingPartialStream = status.isStreaming;
-      this.catchupStreamSessionId = isReceivingPartialStream ? session.id : undefined;
-      this.setState({ ...history, isLoadingEarlierMessages: false, isReceivingPartialStream, status, activity: this.getState().sessionActivities[session.id], availableThinkingLevels: [] });
+      this.setState({ ...history, isLoadingEarlierMessages: false, ...this.setStreamCatchup(status.isStreaming ? session.id : undefined), status, activity: this.getState().sessionActivities[session.id], availableThinkingLevels: [] });
       this.applyStatus(status);
       void this.refreshAvailableThinkingLevels();
       for (const event of buffered) this.applyEvent(event);
@@ -521,7 +519,7 @@ export class SessionController {
         ...history,
         status,
         activity: this.getState().sessionActivities[sessionId],
-        isReceivingPartialStream: status.isStreaming,
+        ...this.setStreamCatchup(status.isStreaming ? sessionId : undefined),
       });
       this.applyStatus(status);
     } catch (error) {
@@ -616,7 +614,7 @@ export class SessionController {
       status: state.selectedSession?.id === status.sessionId ? status : state.status,
       activity: state.selectedSession?.id === status.sessionId && clearsStaleActivity ? undefined : state.activity,
     });
-    if (this.catchupStreamSessionId === status.sessionId && !status.isStreaming) this.finishStreamCatchup(status.sessionId);
+    if (!status.isStreaming) this.finishStreamCatchup(status.sessionId);
   }
 
   private applySessionName(sessionId: string, name: string | undefined) {
@@ -687,10 +685,24 @@ export class SessionController {
     this.pendingTranscriptFrame = undefined;
   }
 
+  // Stream catch-up is a single mode with two coupled facets that must never
+  // drift: the private `catchupStreamSessionId` guard (which suppresses live
+  // transcript events while we lack the in-flight message prefix) and the
+  // public `isReceivingPartialStream` flag (which drives the "Catching up…"
+  // badge). Route every mutation of the mode through this helper so the guard
+  // and the badge can never disagree. Catch-up only ever applies to the
+  // selected session, so an active session id always implies the badge is on.
+  private setStreamCatchup(sessionId: string | undefined): Pick<AppState, "isReceivingPartialStream"> {
+    this.catchupStreamSessionId = sessionId;
+    return { isReceivingPartialStream: sessionId !== undefined };
+  }
+
   private finishStreamCatchup(sessionId: string) {
-    if (this.catchupStreamSessionId !== sessionId) return;
+    const isSelected = this.getState().selectedSession?.id === sessionId;
+    const wasCatchingUp = this.catchupStreamSessionId === sessionId || (isSelected && this.getState().isReceivingPartialStream);
+    if (!wasCatchingUp) return;
     this.catchupStreamSessionId = undefined;
-    if (this.getState().selectedSession?.id === sessionId) this.setState({ isReceivingPartialStream: false });
+    if (isSelected) this.setState({ isReceivingPartialStream: false });
     void this.refreshMessages(sessionId);
   }
 
