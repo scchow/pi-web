@@ -14,7 +14,12 @@ Website: <https://pi-web.dev/>
 
 PI WEB is a web UI for [Pi Coding Agent](https://github.com/earendil-works/pi/tree/main/packages/coding-agent) that keeps agent sessions running on your own machine or server. Add your repositories once, open project workspaces and git worktrees, start sessions inside them, and come back later without losing the work. Your browser becomes the cockpit; your server becomes the persistent development environment. Start on your laptop, check in from your phone, and continue from an iPad or another machine whenever that is the device you have at hand.
 
-![PI WEB demo](docs/assets/pi-web-demo.gif)
+![PI WEB desktop screenshot showing an agent-created pi-web.dev screenshot selected in the file preview](docs/assets/pi-web-desktop.png)
+
+<p align="center">
+  <img src="docs/assets/pi-web-tablet.png" alt="PI WEB tablet screenshot" width="58%" />
+  <img src="docs/assets/pi-web-mobile.png" alt="PI WEB mobile chat screenshot" width="28%" />
+</p>
 
 With PI WEB you can:
 

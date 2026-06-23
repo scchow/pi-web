@@ -31,6 +31,7 @@
     "build": "tsc -p tsconfig.build.json && npm run build:plugin-api && npm run build:plugins && vite build",
     "build:plugin-api": "tsc -p tsconfig.plugin-api.json",
     "build:plugins": "tsc -p tsconfig.plugins.json && node scripts/build-plugins.mjs",
+    "capture:screenshots": "node scripts/capture-screenshots.mjs",
     "typecheck": "tsc --noEmit",
     "knip": "knip",
     "lint": "eslint \"src/**/*.ts\" \"extensions/**/*.ts\" \"pi-web-plugins/**/*.ts\" vite.config.ts vitest.config.ts",
