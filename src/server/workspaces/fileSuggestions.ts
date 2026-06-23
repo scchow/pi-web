@@ -206,8 +206,8 @@ function pathSuggestionPrefix(query: string): { directoryPrefix: string; searchP
 
 function appendRequestPath(base: string, name: string): string {
   if (base === "") return name;
-  if (hasTrailingPathSeparator(base)) return `${base}${name}`;
   if (isAbsolute(base) || win32.isAbsolute(base)) return join(base, name);
+  if (hasTrailingPathSeparator(base)) return `${base}${name}`;
   return `${base}/${name}`;
 }
 
