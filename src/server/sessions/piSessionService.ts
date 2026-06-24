@@ -633,12 +633,33 @@ export class PiSessionService {
     const parentHeader = await readSessionHeaderSummary(parentSessionFile);
     if (parentHeader?.id !== marker.spawnedBySessionId) return;
     const childSessionFile = nonEmptyString(session.sessionFile);
+    if (childSessionFile === undefined) return;
+    const hasReciprocalLink = await this.parentHasReciprocalSubsessionLink(parentSessionFile, marker.spawnedBySessionId, session.sessionId, childSessionFile);
+    if (!hasReciprocalLink) return;
     this.registerSubsession(marker.spawnedBySessionId, {
       childSessionId: session.sessionId,
-      ...(childSessionFile === undefined ? {} : { childSessionFile }),
+      childSessionFile,
       parentSessionFile,
       cwd: session.sessionManager.getCwd(),
     });
+  }
+
+  private async parentHasReciprocalSubsessionLink(parentSessionFile: string, parentSessionId: string, childSessionId: string, childSessionFile: string): Promise<boolean> {
+    let parentManager: PiSessionManager;
+    try {
+      parentManager = this.sessionManager.open(parentSessionFile);
+    } catch {
+      return false;
+    }
+    const entries = parentManager.getEntries?.() ?? parentManager.getBranch();
+    for (const entry of entries) {
+      const link = parsePersistedParentSubsessionLink(entry);
+      if (link === undefined) continue;
+      if (link.spawnedBySessionId !== parentSessionId || link.spawnedSessionId !== childSessionId) continue;
+      if (link.spawnedSessionFile === undefined || !sessionPathsEqual(link.spawnedSessionFile, childSessionFile)) continue;
+      if (await this.persistedSubsessionLinkMatchesParent(parentSessionFile, link)) return true;
+    }
+    return false;
   }
 
   private async getOrOpenTrackedSubsession(sessionId: string): Promise<PiAgentSession> {
@@ -657,7 +678,11 @@ export class PiSessionService {
       }
     }
 
-    return this.getOrOpen(sessionId);
+    const listed = link?.cwd === undefined
+      ? (await this.sessionManager.listAll?.() ?? []).find((session) => session.id === sessionId)
+      : (await this.sessionManager.list(link.cwd)).find((session) => session.id === sessionId);
+    if (listed === undefined) throw new Error("Session not found");
+    return (await this.create(this.sessionManager.open(listed.path), listed.cwd)).runtime.session;
   }
 
   private async subsessionSummaryFields(childSessionId: string): Promise<{ cwd: string; status: SubsessionStatus }> {
@@ -706,16 +731,16 @@ export class PiSessionService {
   }
 
   private async getOrOpenParentForSubsession(parentSessionId: string, childSessionId: string): Promise<PiAgentSession> {
-    const active = this.activeForLookup(parentSessionId);
+    const active = this.active.get(parentSessionId);
     if (active !== undefined) return active.runtime.session;
 
     const parentSessionFile = this.subsessionLinks.get(childSessionId)?.parentSessionFile;
-    if (parentSessionFile !== undefined && (await readSessionHeaderSummary(parentSessionFile))?.id === parentSessionId) {
-      const sessionManager = this.sessionManager.open(parentSessionFile);
-      return (await this.create(sessionManager, sessionManager.getCwd())).runtime.session;
+    if (parentSessionFile === undefined) throw new Error(`Parent session ${parentSessionId} is not available for subsession notification`);
+    if ((await readSessionHeaderSummary(parentSessionFile))?.id !== parentSessionId) {
+      throw new Error(`Parent session ${parentSessionId} is not available for subsession notification`);
     }
-
-    return this.getOrOpen(parentSessionId);
+    const sessionManager = this.sessionManager.open(parentSessionFile);
+    return (await this.create(sessionManager, sessionManager.getCwd())).runtime.session;
   }
 
   /**
