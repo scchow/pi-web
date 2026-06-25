@@ -500,6 +500,7 @@ const proseInputAssistanceAttributes: Record<string, string> = {
   autocorrect: "on",
   autocapitalize: "sentences",
   writingsuggestions: "true",
+  dir: "auto",
 };
 
 const codeLikeInputAssistanceAttributes: Record<string, string> = {
@@ -507,6 +508,7 @@ const codeLikeInputAssistanceAttributes: Record<string, string> = {
   autocorrect: "off",
   autocapitalize: "off",
   writingsuggestions: "false",
+  dir: "auto",
 };
 
 function inputAssistanceContentAttributes(draftBeforeCursor: string): Record<string, string> {
