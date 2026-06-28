@@ -1,5 +1,5 @@
 import { open, readFile, writeFile } from "node:fs/promises";
-import type { Api, ImageContent, Model } from "@earendil-works/pi-ai";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import {
   AuthStorage,
   createAgentSessionFromServices,
@@ -102,6 +102,11 @@ interface PersistedChildSubsessionLink {
   spawnedSessionId: string;
 }
 
+interface StartSessionOptions {
+  parentSession?: string;
+  initialModel?: AgentModel;
+}
+
 function requirePromptText(value: unknown): string {
   if (typeof value !== "string") throw new Error("Prompt text is required");
   return value;
@@ -138,7 +143,7 @@ interface WorkspaceArchiveCandidate extends SessionArchiveTreeCandidate {
   activeSession?: PiAgentSession;
 }
 
-type AgentModel = Model<Api>;
+type AgentModel = NonNullable<SpawnSessionInvocation["model"]>;
 type ModelRegistryInstance = ReturnType<typeof ModelRegistry.create>;
 
 export interface PiSessionManager {
@@ -223,29 +228,56 @@ interface CreateAgentRuntimeOptions {
   cwd: string;
   agentDir: string;
   sessionManager: PiSessionManager;
+  initialModel?: AgentModel;
 }
 
-type CreateAgentRuntime = (createRuntime: CreateAgentSessionRuntimeFactory, options: CreateAgentRuntimeOptions) => Promise<PiSessionRuntime>;
+type PiWebCreateAgentSessionRuntimeFactory = (
+  options: Parameters<CreateAgentSessionRuntimeFactory>[0] & { initialModel?: AgentModel }
+) => ReturnType<CreateAgentSessionRuntimeFactory>;
 
-function defaultCreateAgentRuntime(createRuntime: CreateAgentSessionRuntimeFactory, options: CreateAgentRuntimeOptions): Promise<PiSessionRuntime> {
+type CreateAgentRuntime = (createRuntime: PiWebCreateAgentSessionRuntimeFactory, options: CreateAgentRuntimeOptions) => Promise<PiSessionRuntime>;
+
+function defaultCreateAgentRuntime(createRuntime: PiWebCreateAgentSessionRuntimeFactory, options: CreateAgentRuntimeOptions): Promise<PiSessionRuntime> {
   if (!(options.sessionManager instanceof SessionManager)) throw new Error("Default runtime creation requires an SDK SessionManager");
-  return createAgentSessionRuntime(createRuntime, { ...options, sessionManager: options.sessionManager });
+  const runtimeFactory = createRuntimeWithOneShotInitialModel(createRuntime, options.initialModel);
+  return createAgentSessionRuntime(runtimeFactory, {
+    cwd: options.cwd,
+    agentDir: options.agentDir,
+    sessionManager: options.sessionManager,
+  });
+}
+
+function createRuntimeWithOneShotInitialModel(createRuntime: PiWebCreateAgentSessionRuntimeFactory, initialModel: AgentModel | undefined): CreateAgentSessionRuntimeFactory {
+  // The inherited model belongs only to the session being spawned. Do not keep
+  // reapplying it if that runtime later creates/forks/switches sessions itself.
+  let pendingInitialModel = initialModel;
+  return async (options) => {
+    const model = pendingInitialModel;
+    pendingInitialModel = undefined;
+    return createRuntime({
+      ...options,
+      ...(model === undefined ? {} : { initialModel: model }),
+    });
+  };
 }
 
 type SpawnSessionFn = (input: SpawnSessionInvocation) => Promise<SpawnSessionResult>;
 
-function createDefaultRuntimeFactory(authStorage: AuthStorage, modelRegistry: ModelRegistryInstance, spawn?: SpawnSessionFn, subsessions?: SubsessionToolDeps): CreateAgentSessionRuntimeFactory {
-  return async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
+function createDefaultRuntimeFactory(authStorage: AuthStorage, modelRegistry: ModelRegistryInstance, spawn?: SpawnSessionFn, subsessions?: SubsessionToolDeps): PiWebCreateAgentSessionRuntimeFactory {
+  return async ({ cwd, agentDir, sessionManager, sessionStartEvent, initialModel }) => {
     const services = await createAgentSessionServices({ cwd, agentDir, authStorage, modelRegistry });
     const customTools = [
       createPiWebEditToolDefinition(cwd),
       ...(spawn === undefined ? [] : [createSpawnSessionToolDefinition(cwd, { spawn })]),
       ...(subsessions === undefined ? [] : createSubsessionToolDefinitions(cwd, subsessions)),
     ];
-    const options = sessionStartEvent === undefined
-      ? { services, sessionManager, customTools }
-      : { services, sessionManager, sessionStartEvent, customTools };
-    const result = await createAgentSessionFromServices(options);
+    const result = await createAgentSessionFromServices({
+      services,
+      sessionManager,
+      customTools,
+      ...(sessionStartEvent === undefined ? {} : { sessionStartEvent }),
+      ...(initialModel === undefined ? {} : { model: initialModel }),
+    });
     return { ...result, services, diagnostics: services.diagnostics };
   };
 }
@@ -278,7 +310,7 @@ export interface PiSessionServiceDependencies {
   archiveStore?: SessionArchiveRepository;
   agentDir?: string;
   sessionManager?: PiSessionManagerGateway;
-  createRuntime?: CreateAgentSessionRuntimeFactory;
+  createRuntime?: PiWebCreateAgentSessionRuntimeFactory;
   createAgentRuntime?: CreateAgentRuntime;
   modelRegistry?: ModelRegistryInstance;
   heartbeatIntervalMs?: number;
@@ -328,7 +360,7 @@ export class PiSessionService {
   private readonly archiveStore: SessionArchiveRepository;
   private readonly agentDir: string;
   private readonly sessionManager: PiSessionManagerGateway;
-  private readonly createRuntime: CreateAgentSessionRuntimeFactory;
+  private readonly createRuntime: PiWebCreateAgentSessionRuntimeFactory;
   private readonly createAgentRuntime: CreateAgentRuntime;
   private readonly modelRegistry: ModelRegistryInstance;
   private readonly workspaceActivity: Pick<WorkspaceActivityService, "applySessionStatus" | "applySessionActivity" | "removeSession" | "reconcileSessionActivity"> | undefined;
@@ -464,8 +496,12 @@ export class PiSessionService {
     return [...unarchivedSessions, ...archivedSessions];
   }
 
-  async start(cwd: string, parentSession?: string): Promise<ClientSession> {
-    const active = await this.create(this.sessionManager.create(cwd, parentSession === undefined ? undefined : { parentSession }), cwd);
+  async start(cwd: string, options: StartSessionOptions = {}): Promise<ClientSession> {
+    const active = await this.create(
+      this.sessionManager.create(cwd, options.parentSession === undefined ? undefined : { parentSession: options.parentSession }),
+      cwd,
+      options.initialModel === undefined ? {} : { initialModel: options.initialModel },
+    );
     const { session } = active.runtime;
     const created: ClientSession = {
       id: session.sessionId,
@@ -477,7 +513,7 @@ export class PiSessionService {
       firstMessage: "",
       // Include the parent so listeners can nest the new session in the tree
       // immediately, instead of showing it flat until the next reload.
-      ...(parentSession === undefined ? {} : { parentSessionPath: parentSession }),
+      ...(options.parentSession === undefined ? {} : { parentSessionPath: options.parentSession }),
     };
     // Broadcast so other clients (and the spawning agent's UI) can add the new
     // session to their list without a manual reload.
@@ -494,7 +530,7 @@ export class PiSessionService {
     if (this.spawnTargets === undefined) throw new Error("Spawning sessions is disabled");
     const decision = await this.spawnTargets.resolveSpawnTarget(input.spawningCwd, input.cwd);
     if (!decision.allowed) throw spawnTargetError(decision);
-    const created = await this.start(decision.cwd);
+    const created = await this.start(decision.cwd, input.model === undefined ? {} : { initialModel: input.model });
     await this.prompt(created.id, input.prompt);
     this.logger.info(
       { spawningCwd: input.spawningCwd, sessionId: created.id, cwd: decision.cwd, promptLength: input.prompt.length },
@@ -513,7 +549,10 @@ export class PiSessionService {
     if (this.spawnTargets === undefined) throw new Error("Spawning sessions is disabled");
     const decision = await this.spawnTargets.resolveSpawnTarget(input.spawningCwd, input.cwd);
     if (!decision.allowed) throw spawnTargetError(decision);
-    const created = await this.start(decision.cwd, input.parentSessionFile);
+    const created = await this.start(decision.cwd, {
+      ...(input.parentSessionFile === undefined ? {} : { parentSession: input.parentSessionFile }),
+      ...(input.model === undefined ? {} : { initialModel: input.model }),
+    });
     const parentSessionFile = nonEmptyString(input.parentSessionFile);
     const link: TrackedSubsessionLink = {
       parentSessionId: input.parentSessionId,
@@ -1305,8 +1344,13 @@ export class PiSessionService {
     return undefined;
   }
 
-  private async create(sessionManager: PiSessionManager, cwd: string): Promise<ActiveSession<PiSessionRuntime>> {
-    const runtime = await this.createAgentRuntime(this.createRuntime, { cwd, agentDir: this.agentDir, sessionManager });
+  private async create(sessionManager: PiSessionManager, cwd: string, options: Pick<StartSessionOptions, "initialModel"> = {}): Promise<ActiveSession<PiSessionRuntime>> {
+    const runtime = await this.createAgentRuntime(this.createRuntime, {
+      cwd,
+      agentDir: this.agentDir,
+      sessionManager,
+      ...(options.initialModel === undefined ? {} : { initialModel: options.initialModel }),
+    });
     await this.bindSessionExtensions(runtime.session);
     const active: ActiveSession<PiSessionRuntime> = { runtime, unsubscribe: noop };
     this.bindRuntime(active);
