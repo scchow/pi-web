@@ -1707,7 +1707,7 @@ export class PiSessionService {
     const model = session.model;
     if (model === undefined) return;
 
-    void generateShortSessionName(this.modelRegistry, model, firstMessage).then((name) => {
+    void generateShortSessionName(session.agent.streamFn, model, firstMessage).then((name) => {
       this.applyGeneratedSessionName(session, name ?? fallbackSessionName(firstMessage));
     }).catch(() => {
       this.applyGeneratedSessionName(session, fallbackSessionName(firstMessage));
