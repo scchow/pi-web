@@ -1,6 +1,8 @@
 import { css, html, LitElement, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { PiPackageInfo, PiPackageScope, PiPackagesResponse } from "../../api";
+import "./SettingsPanelFrame";
+import type { SettingsNotice } from "./SettingsPanelFrame";
 import { isPiPackageManagementUnsupported, isPiPackageOperationPending, normalizePiPackageSource, piPackageFilteredLabel, piPackageInstalledPathLabel, piPackageScopeLabel, piPackageSourceValidationMessage, piPackageTargetContext, piPackageTargetLabel, piPackageUpdateDisabledReason, updateAllPiPackagesDisabledReason, type PiPackageManagementSupport, type PiPackageOperationState, type PiPackageTargetContext } from "./piPackageSettings";
 
 @customElement("settings-packages-panel")
@@ -24,48 +26,70 @@ export class SettingsPackagesPanel extends LitElement {
     const target = this.packageTarget;
     const targetLabel = piPackageTargetLabel(target);
     const packageManagementUnavailable = this.packageManagementUnavailable;
+    const showPackageControls = this.packagesResponse !== undefined && !packageManagementUnavailable;
     return html`
-      <div class="section-heading">
-        <div>
-          <h2>Pi packages</h2>
-          <p>Managing Pi packages on <strong>${targetLabel}</strong>. Install, remove, and update packages managed by Pi on the selected machine. Pi packages can provide extensions, skills, prompt templates, themes, context/system prompt files, and PI WEB browser plugins.</p>
-        </div>
-        <button class="secondary" title=${packageManagementUnavailable ? this.packageManagementUnavailableMessage(targetLabel) : `Reload Pi packages from ${targetLabel}`} ?disabled=${this.loading || this.isOperating || packageManagementUnavailable} @click=${() => { void this.onReload?.(); }}>Reload</button>
-      </div>
-      <div class="trust-warning"><strong>Trusted code warning:</strong> Pi packages and PI WEB plugins can run with your user permissions. Install packages and enable plugins only from sources you trust.</div>
-      ${this.renderCompatibilityNote(targetLabel)}
-      ${this.renderMessages()}
-      <form class="install-card" @submit=${(event: Event) => { void this.installPackage(event); }}>
-        <label for="package-source">Pi package source</label>
-        <div class="install-row">
-          <input id="package-source" .value=${this.installSource} ?disabled=${this.isOperating || packageManagementUnavailable} placeholder="npm:@scope/package, git URL, or local path" @input=${(event: Event) => { this.updateInstallSource(event); }}>
-          <button type="submit" title=${packageManagementUnavailable ? this.packageManagementUnavailableMessage(targetLabel) : "Install this Pi package"} ?disabled=${this.isOperating || packageManagementUnavailable}>${isPiPackageOperationPending(this.operation, "install") ? "Installing…" : "Install"}</button>
-        </div>
-        ${this.validationMessage === "" ? null : html`<div class="field-error">${this.validationMessage}</div>`}
-        <small>Installs run on ${targetLabel} and use Pi's default package location, equivalent to <code>pi install &lt;source&gt;</code>. PI WEB does not ask you to choose an install location.</small>
-      </form>
+      <settings-panel-frame
+        heading="Pi packages"
+        .description=${packagesDescription(targetLabel)}
+        actionLabel="Reload"
+        actionTitle=${packageManagementUnavailable ? this.packageManagementUnavailableMessage(targetLabel) : `Reload Pi packages from ${targetLabel}`}
+        .actionDisabled=${this.loading || this.isOperating || packageManagementUnavailable}
+        .notices=${this.panelNotices(targetLabel, showPackageControls)}
+        .onAction=${this.onReload}
+      >
+        ${this.renderPanelContent(packages, target, targetLabel)}
+      </settings-panel-frame>
+    `;
+  }
+
+  private panelNotices(targetLabel: string, showTrustedCodeWarning: boolean): readonly SettingsNotice[] {
+    const notices: SettingsNotice[] = [];
+    if (this.packageManagementUnavailable) {
+      notices.push({ type: "availability", content: this.packageManagementUnavailableMessage(targetLabel) });
+    } else if (this.error !== "") {
+      notices.push({ type: "error", content: this.error });
+    }
+    if (this.operationMessage !== "") notices.push({ type: "success", content: this.operationMessage });
+    if (showTrustedCodeWarning) {
+      notices.push({
+        type: "security",
+        content: html`<strong>Trusted code warning:</strong> Pi packages and PI WEB plugins can run with your user permissions. Install packages and enable plugins only from sources you trust.`,
+      });
+    }
+    return notices;
+  }
+
+  private renderPanelContent(packages: PiPackageInfo[], target: PiPackageTargetContext, targetLabel: string): TemplateResult | null {
+    if (this.packageManagementUnavailable) return null;
+    if (this.packagesResponse === undefined) {
+      return html`<div class="loading-card">${this.loading ? `Loading Pi packages from ${targetLabel}…` : `Pi package list unavailable for ${targetLabel}. Use Reload to try again.`}</div>`;
+    }
+    return html`
+      ${this.renderInstallForm(targetLabel)}
       ${this.renderPackageList(packages, target)}
     `;
   }
 
-  private renderMessages(): TemplateResult | null {
-    if (this.error !== "") return html`<div class="message error-message">${this.error}</div>`;
-    if (this.operationMessage !== "") return html`<div class="message success-message">${this.operationMessage}</div>`;
-    return null;
-  }
-
-  private renderCompatibilityNote(targetLabel: string): TemplateResult | null {
-    if (!this.packageManagementUnavailable || this.error !== "") return null;
-    return html`<div class="message error-message">Pi package management is not advertised by ${targetLabel}. Update and restart Pi-Web on that machine, then refresh the app before managing Pi packages.</div>`;
+  private renderInstallForm(targetLabel: string): TemplateResult {
+    return html`
+      <form class="install-card" @submit=${(event: Event) => { void this.installPackage(event); }}>
+        <label for="package-source">Pi package source</label>
+        <div class="install-row">
+          <input id="package-source" .value=${this.installSource} ?disabled=${this.isOperating} placeholder="npm:@scope/package, git URL, or local path" @input=${(event: Event) => { this.updateInstallSource(event); }}>
+          <button type="submit" title="Install this Pi package" ?disabled=${this.isOperating}>${isPiPackageOperationPending(this.operation, "install") ? "Installing…" : "Install"}</button>
+        </div>
+        ${this.validationMessage === "" ? null : html`<div class="field-error">${this.validationMessage}</div>`}
+        <small>Installs run on ${targetLabel} and use Pi's default package location, equivalent to <code>pi install &lt;source&gt;</code>. PI WEB does not ask you to choose an install location.</small>
+      </form>
+    `;
   }
 
   private renderPackageList(packages: PiPackageInfo[], target: PiPackageTargetContext): TemplateResult {
     const targetLabel = piPackageTargetLabel(target);
-    const packageListUnavailable = this.error !== "" && packages.length === 0;
     const packageManagementUnavailable = this.packageManagementUnavailable;
     const updateAllReason = packageManagementUnavailable ? this.packageManagementUnavailableMessage(targetLabel) : updateAllPiPackagesDisabledReason(packages);
-    const showUpdateAllReason = updateAllReason !== undefined && (packages.length > 0 || (!this.loading && !packageListUnavailable));
-    const updateAllTitle = packageListUnavailable ? `Pi package list unavailable for ${targetLabel}` : updateAllReason ?? "Update all user-scope Pi packages";
+    const showUpdateAllReason = updateAllReason !== undefined && packages.length > 0;
+    const updateAllTitle = updateAllReason ?? "Update all user-scope Pi packages";
     return html`
       <section class="package-section" aria-label="Configured Pi packages">
         <div class="package-toolbar">
@@ -86,10 +110,6 @@ export class SettingsPackagesPanel extends LitElement {
 
   private renderPackageListContent(packages: PiPackageInfo[], targetLabel: string): TemplateResult {
     if (this.loading && packages.length === 0) return html`<div class="loading-card">Loading Pi packages from ${targetLabel}…</div>`;
-    if (this.error !== "" && packages.length === 0) {
-      if (this.packageManagementUnavailable) return html`<div class="loading-card">Pi package management is unavailable for ${targetLabel} until Pi-Web on that machine advertises package-management support.</div>`;
-      return html`<div class="loading-card">Pi package list unavailable for ${targetLabel}. Use Reload to try again.</div>`;
-    }
     if (packages.length === 0) return html`<div class="loading-card">No Pi packages configured in Pi settings on ${targetLabel} yet.</div>`;
     return html`
       <div class="package-list">
@@ -178,10 +198,9 @@ export class SettingsPackagesPanel extends LitElement {
 
   static override styles = css`
     :host { display: block; }
-    .section-heading, .package-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
-    .section-heading > div, .package-toolbar > div, .package-main { display: grid; gap: 6px; min-width: 0; }
-    h2, h3, p { margin: 0; }
-    h2 { font-size: 17px; line-height: 1.25; }
+    .package-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+    .package-toolbar > div, .package-main { display: grid; gap: 6px; min-width: 0; }
+    h3, p { margin: 0; }
     h3 { font-size: 15px; line-height: 1.25; }
     p, small { color: var(--pi-muted); line-height: 1.45; }
     button, input { font: inherit; }
@@ -191,17 +210,11 @@ export class SettingsPackagesPanel extends LitElement {
     label { font-weight: 700; }
     .secondary { flex: 0 0 auto; }
     .danger { border-color: color-mix(in srgb, var(--pi-danger) 55%, var(--pi-border)); color: var(--pi-danger); }
-    .message, .loading-card, .trust-warning, .install-card, .package-card { border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); padding: 12px; }
-    .message, .trust-warning, .install-card { margin-bottom: 12px; }
-    .trust-warning { border-color: var(--pi-warning-border); color: var(--pi-text); background: var(--pi-warning-surface); line-height: 1.45; }
-    .error-message, .field-error { color: var(--pi-danger); }
-    .error-message { border-color: var(--pi-danger); background: color-mix(in srgb, var(--pi-danger) 10%, var(--pi-surface)); }
-    .success-message { border-color: var(--pi-success-border); color: var(--pi-success); background: var(--pi-success-surface); }
+    .loading-card, .install-card, .package-card { border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); padding: 12px; }
+    .field-error { color: var(--pi-danger); font-size: 12px; }
     .install-card { display: grid; gap: 8px; }
     .install-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
-    .field-error { font-size: 12px; }
     .package-section { display: block; }
-    .package-toolbar { margin-top: 16px; }
     .loading-card, .action-note { color: var(--pi-muted); }
     .action-note { margin-bottom: 10px; font-size: 12px; }
     .package-list { display: grid; gap: 10px; }
@@ -212,11 +225,15 @@ export class SettingsPackagesPanel extends LitElement {
     code { border: 1px solid var(--pi-border-muted); border-radius: 5px; background: var(--pi-bg); padding: 1px 4px; color: var(--pi-text); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
 
     @media (max-width: 760px) {
-      .section-heading, .package-toolbar { display: grid; gap: 12px; }
-      .section-heading .secondary, .package-toolbar .secondary { justify-self: start; }
+      .package-toolbar { display: grid; gap: 12px; }
+      .package-toolbar .secondary { justify-self: start; }
       .install-row, .package-card { grid-template-columns: minmax(0, 1fr); align-items: start; }
       .package-actions { justify-self: start; flex-wrap: wrap; }
       .package-main strong, .package-main small { white-space: normal; }
     }
   `;
+}
+
+function packagesDescription(targetLabel: string): TemplateResult {
+  return html`Managing Pi packages on <strong>${targetLabel}</strong>. Install, remove, and update packages managed by Pi on the selected machine. Pi packages can provide extensions, skills, prompt templates, themes, context/system prompt files, and PI WEB browser plugins.`;
 }

@@ -15,6 +15,7 @@ describe("settings-general-panel copy", () => {
     const strings = collectTemplateStrings(template).join("");
     const values = collectTemplateValues(template);
 
+    expect(strings).toContain("<settings-panel-frame");
     expect(strings).toContain("Gateway server fields edit this local gateway. File access and upload defaults edit ");
     expect(strings).toContain("Host, port, and allowed hosts are saved in the gateway config.");
     expect(strings).toContain("External filesystem roots and upload defaults are saved on ");
@@ -30,8 +31,26 @@ describe("settings-general-panel copy", () => {
     const template = panel.render();
     const values = collectTemplateValues(template);
 
+    expect(values).toContain("Save gateway server config");
+    expect(values).not.toContain("Save file/upload config");
     expect(values).toContain("Selected-machine file access config is unavailable. Reload before saving file/upload settings.");
     expect(values).toContain("Failed to load file access/upload config from Lab Mac (remote machine): unsupported");
+  });
+
+  it("uses frame notices for saved and gateway messages while keeping selected-machine errors scoped", () => {
+    const panel = new SettingsGeneralPanel();
+    panel.error = "Gateway failed";
+    panel.machineError = "Selected-machine failed";
+    panel.savedMessage = "Config saved.";
+
+    const values = collectTemplateValues(panel.render());
+    const notices = values.find(isSettingsNoticeArray);
+
+    expect(notices).toEqual([
+      { type: "error", title: "Gateway server", content: "Gateway failed" },
+      { type: "success", content: "Config saved." },
+    ]);
+    expect(values).toContain("Selected-machine failed");
   });
 });
 
@@ -188,6 +207,12 @@ function templateValues(template: TemplateResult): readonly unknown[] {
 
 function isTemplateResult(value: unknown): value is TemplateResult {
   return typeof value === "object" && value !== null && isStringArray(Reflect.get(value, "strings")) && Array.isArray(Reflect.get(value, "values"));
+}
+
+function isSettingsNoticeArray(value: unknown): value is readonly { type: string; content: unknown; title?: string }[] {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.every((item: unknown) => typeof item === "object" && item !== null && typeof Reflect.get(item, "type") === "string" && Reflect.has(item, "content"));
 }
 
 function isStringArray(value: unknown): value is string[] {

@@ -119,7 +119,6 @@ export class SettingsDialog extends LitElement {
               ${this.renderNavButton("shortcuts", "Keyboard", "Gateway shortcuts")}
             </nav>
             <main class="settings-content">
-              ${this.renderScopeNote()}
               ${this.renderActiveSection()}
             </main>
           </div>
@@ -216,22 +215,6 @@ export class SettingsDialog extends LitElement {
         <small>${detail}</small>
       </button>
     `;
-  }
-
-  private renderScopeNote(): TemplateResult {
-    return html`
-      <div class="scope-note" role="note">
-        <strong>This tab edits:</strong> ${this.settingsScopeMessage()}
-      </div>
-    `;
-  }
-
-  private settingsScopeMessage(): string {
-    if (this.section === "packages") return `Selected machine packages: ${piPackageTargetLabel(this.packageTarget())}.`;
-    if (this.section === "sessiond") return `Selected machine session-daemon config: ${settingsMachineTargetLabel(this.settingsTarget())}.`;
-    if (this.section === "plugins") return `Selected machine PI WEB plugin enablement: ${settingsMachineTargetLabel(this.settingsTarget())}.`;
-    if (this.section === "shortcuts") return "Local gateway keyboard shortcuts.";
-    return `Gateway server config and selected machine file/upload config: ${settingsMachineTargetLabel(this.settingsTarget())}.`;
   }
 
   private navigate(section: SettingsSection): void {
@@ -657,7 +640,6 @@ export class SettingsDialog extends LitElement {
     .settings-nav button.selected { border-color: var(--pi-accent); background: var(--pi-selection-bg); }
     .settings-nav small { color: var(--pi-muted); }
     .settings-content { min-width: 0; min-height: 0; overflow: auto; padding: 18px; }
-    .scope-note { margin-bottom: 14px; border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); color: var(--pi-text); padding: 10px 12px; line-height: 1.45; }
 
     @media (max-width: 760px) {
       .backdrop { padding: 0; place-items: stretch; }

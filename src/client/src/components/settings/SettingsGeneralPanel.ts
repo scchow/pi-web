@@ -1,6 +1,8 @@
 import { css, html, LitElement, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { DEFAULT_WORKSPACE_UPLOADS_FOLDER, type PiWebConfigEnvOverrides, type PiWebConfigResponse, type PiWebConfigValues } from "../../api";
+import "./SettingsPanelFrame";
+import type { SettingsNotice } from "./SettingsPanelFrame";
 import {
   emptyGatewayServerConfigDraft,
   emptyMachineAccessConfigDraft,
@@ -11,6 +13,10 @@ import {
   type GatewayServerConfigDraft,
   type MachineAccessConfigDraft,
 } from "./settingsConfigDraft";
+
+function generalDescription(targetLabel: string): TemplateResult {
+  return html`Gateway server fields edit this local gateway. File access and upload defaults edit ${targetLabel}.`;
+}
 
 @customElement("settings-general-panel")
 export class SettingsGeneralPanel extends LitElement {
@@ -45,18 +51,19 @@ export class SettingsGeneralPanel extends LitElement {
 
   override render(): TemplateResult {
     return html`
-      <div class="section-heading">
-        <div>
-          <h2>General configuration</h2>
-          <p>Gateway server fields edit this local gateway. File access and upload defaults edit ${this.targetLabel}.</p>
+      <settings-panel-frame
+        heading="General configuration"
+        .description=${generalDescription(this.targetLabel)}
+        actionLabel="Reload"
+        .actionDisabled=${this.loading || this.machineLoading}
+        .notices=${this.panelNotices()}
+        .onAction=${() => { this.reloadAll(); }}
+      >
+        <div class="settings-sections">
+          ${this.renderGatewayServerSettings()}
+          ${this.renderSelectedMachineAccessSettings()}
         </div>
-        <button class="secondary" ?disabled=${this.loading || this.machineLoading} @click=${() => { this.reloadAll(); }}>Reload</button>
-      </div>
-      ${this.renderSavedMessage()}
-      <div class="settings-sections">
-        ${this.renderGatewayServerSettings()}
-        ${this.renderSelectedMachineAccessSettings()}
-      </div>
+      </settings-panel-frame>
     `;
   }
 
@@ -68,7 +75,6 @@ export class SettingsGeneralPanel extends LitElement {
           <h3>Gateway server</h3>
           <p>Host, port, and allowed hosts are saved in the gateway config. Address changes require the web service to restart before the running server binds to the new address.</p>
         </div>
-        ${this.renderGatewayMessages()}
         ${config === undefined && this.loading ? html`<div class="loading-card">Loading gateway configuration…</div>` : html`
           <div class="config-path-card">
             <span>Gateway config file</span>
@@ -161,15 +167,12 @@ export class SettingsGeneralPanel extends LitElement {
     `;
   }
 
-  private renderSavedMessage(): TemplateResult | null {
-    if (this.savedMessage === "") return null;
-    return html`<div class="message success-message">${this.savedMessage}</div>`;
-  }
-
-  private renderGatewayMessages(): TemplateResult | null {
-    const error = this.gatewayLocalError || this.error;
-    if (error === "") return null;
-    return html`<div class="message error-message">${error}</div>`;
+  private panelNotices(): readonly SettingsNotice[] {
+    const notices: SettingsNotice[] = [];
+    const gatewayError = this.gatewayLocalError || this.error;
+    if (gatewayError !== "") notices.push({ type: "error", title: "Gateway server", content: gatewayError });
+    if (this.savedMessage !== "") notices.push({ type: "success", content: this.savedMessage });
+    return notices;
   }
 
   private renderMachineMessages(): TemplateResult | null {
@@ -247,23 +250,19 @@ export class SettingsGeneralPanel extends LitElement {
 
   static override styles = css`
     :host { display: block; }
-    .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
-    .section-heading > div, .card-heading { display: grid; gap: 6px; min-width: 0; }
-    h2, h3, p { margin: 0; }
-    h2 { font-size: 17px; line-height: 1.25; }
+    .card-heading { display: grid; gap: 6px; min-width: 0; }
+    h3, p { margin: 0; }
     h3 { font-size: 13px; line-height: 1.3; }
     p { color: var(--pi-muted); line-height: 1.45; }
     button, input, select, textarea { font: inherit; }
     button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; cursor: pointer; }
     button:disabled { opacity: .55; cursor: not-allowed; }
-    .secondary { flex: 0 0 auto; }
     .settings-sections { display: grid; gap: 14px; }
     .settings-card, .message, .loading-card, .config-path-card, .effective-card { border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); padding: 12px; }
     .settings-card { display: grid; gap: 14px; }
     .message { margin-bottom: 12px; }
     .settings-card .message { margin-bottom: 0; }
     .error-message { border-color: var(--pi-danger); color: var(--pi-danger); background: color-mix(in srgb, var(--pi-danger) 10%, var(--pi-surface)); }
-    .success-message { border-color: var(--pi-success-border); color: var(--pi-success); background: var(--pi-success-surface); }
     .loading-card { color: var(--pi-muted); }
     .config-path-card { display: grid; gap: 5px; }
     .config-path-card span, .field-heading, dt { color: var(--pi-muted); font-size: 12px; font-weight: 700; text-transform: uppercase; }
@@ -286,8 +285,6 @@ export class SettingsGeneralPanel extends LitElement {
     .primary { border-color: var(--pi-accent); background: var(--pi-selection-bg); color: var(--pi-text-bright); }
 
     @media (max-width: 760px) {
-      .section-heading { display: grid; gap: 12px; }
-      .section-heading .secondary { justify-self: start; }
       .effective-card dl > div { grid-template-columns: minmax(0, 1fr); gap: 3px; }
     }
   `;

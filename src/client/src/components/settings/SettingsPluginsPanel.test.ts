@@ -2,42 +2,67 @@ import { describe, expect, it } from "vitest";
 import type { TemplateResult } from "lit";
 import type { PiWebConfigResponse, PiWebConfigValues, PiWebPluginInfo } from "../../api";
 import { SettingsPluginsPanel } from "./SettingsPluginsPanel";
+import type { SettingsNotice } from "./SettingsPanelFrame";
 
-describe("settings-plugins-panel copy", () => {
-  it("names the selected machine in plugin scope copy", () => {
+describe("settings-plugins-panel layout", () => {
+  it("orders load and save notices before the trusted-code warning and plugin content", () => {
+    const panel = new SettingsPluginsPanel();
+    panel.targetLabel = "Lab Mac (remote machine)";
+    panel.configResponse = configResponse({ plugins: { "remote-enabled": { enabled: true } } });
+    panel.pluginsResponse = { plugins: [pluginInfo("remote-enabled", true)] };
+    panel.error = "Failed to load PI WEB plugin settings from Lab Mac: PI WEB plugins: timed out.";
+    panel.savedMessage = "Config saved.";
+
+    const rendered = flattenTemplateContent(panel.render());
+
+    expectTextOrder(rendered, [
+      "PI WEB plugins",
+      "Enable or disable discovered PI WEB browser plugins on ",
+      "Lab Mac (remote machine)",
+      "Failed to load PI WEB plugin settings from Lab Mac: PI WEB plugins: timed out.",
+      "Config saved. Reload the browser tab to apply plugin changes.",
+      "Trusted code warning:",
+      "Config key on Lab Mac (remote machine):",
+      "remote-enabled",
+    ]);
+  });
+
+  it("does not show a false empty state when the plugin response is missing", () => {
     const panel = new SettingsPluginsPanel();
     panel.targetLabel = "Lab Mac (remote machine)";
 
-    const template = panel.render();
-    const strings = collectTemplateStrings(template).join("");
-    const values = collectTemplateValues(template);
+    const rendered = flattenTemplateContent(panel.render());
 
-    expect(strings).toContain("Enable or disable discovered PI WEB browser plugins on ");
-    expect(strings).toContain("Config key on ");
-    expect(strings).toContain("No PI WEB browser plugins discovered on ");
-    expect(values.filter((value) => value === "Lab Mac (remote machine)")).toHaveLength(3);
+    expect(rendered).toContain("PI WEB plugin list unavailable for Lab Mac (remote machine). Use Reload to try again.");
+    expect(rendered).not.toContain("No PI WEB browser plugins discovered");
+    expect(rendered).not.toContain("Trusted code warning");
   });
-});
 
-describe("settings-plugins-panel state", () => {
-  it("shows disabled remote plugins from the selected machine plugin list", () => {
+  it("shows the empty plugin state only after a plugin response has loaded", () => {
     const panel = new SettingsPluginsPanel();
     panel.targetLabel = "Lab Mac (remote machine)";
-    panel.configResponse = configResponse({ plugins: { "remote-disabled": { enabled: false } } });
-    panel.pluginsResponse = { plugins: [pluginInfo("remote-disabled", false)] };
+    panel.pluginsResponse = { plugins: [] };
 
-    const values = collectTemplateValues(panel.render());
+    const rendered = flattenTemplateContent(panel.render());
 
-    expect(values).toContain("remote-disabled");
-    expect(values).toContain("Config disabled");
-    expect(values).toContain("Disabled");
+    expect(rendered).toContain("No PI WEB browser plugins discovered on Lab Mac (remote machine).");
+    expect(rendered).not.toContain("PI WEB plugin list unavailable");
+    expect(rendered).not.toContain("Trusted code warning");
   });
 
-  it("disables plugin toggles while selected-machine config is unavailable", () => {
+  it("keeps loaded plugins visible but disabled when selected-machine config is unavailable", () => {
     const panel = new SettingsPluginsPanel();
+    panel.targetLabel = "Lab Mac (remote machine)";
     panel.pluginsResponse = { plugins: [pluginInfo("remote-disabled", false)] };
 
-    expect(collectTemplateStrings(panel.render()).join("")).toContain("Configuration is unavailable. Reload to try again before changing plugin enablement.");
+    const rendered = flattenTemplateContent(panel.render());
+
+    expectTextOrder(rendered, [
+      "Configuration is unavailable. Reload to try again before changing plugin enablement.",
+      "Trusted code warning:",
+      "remote-disabled",
+    ]);
+    expect(countOccurrences(rendered, "Configuration is unavailable. Reload to try again before changing plugin enablement.")).toBe(1);
     expect(templateValues(renderPluginTemplate(panel, pluginInfo("remote-disabled", false))).filter(isBoolean)).toEqual([false, true]);
   });
 });
@@ -52,39 +77,55 @@ function isPanelRenderPlugin(value: unknown): value is (this: SettingsPluginsPan
   return typeof value === "function";
 }
 
-function collectTemplateStrings(template: TemplateResult): string[] {
-  const strings: string[] = [];
+function flattenTemplateContent(template: TemplateResult): string {
+  const chunks: string[] = [];
   visitTemplate(template);
-  return strings;
+  return chunks.join("");
 
   function visitTemplate(current: TemplateResult): void {
-    strings.push(...templateStrings(current));
-    for (const value of templateValues(current)) {
-      if (Array.isArray(value)) {
-        for (const item of value) if (isTemplateResult(item)) visitTemplate(item);
-      } else if (isTemplateResult(value)) {
-        visitTemplate(value);
-      }
+    const strings = templateStrings(current);
+    const values = templateValues(current);
+    for (let index = 0; index < values.length; index += 1) {
+      const staticChunk = strings[index];
+      if (staticChunk !== undefined) chunks.push(staticChunk);
+      visitValue(values[index]);
+    }
+    const finalChunk = strings[values.length];
+    if (finalChunk !== undefined) chunks.push(finalChunk);
+  }
+
+  function visitValue(value: unknown): void {
+    if (Array.isArray(value)) {
+      for (const item of value) visitValue(item);
+      return;
+    }
+    if (isSettingsNotice(value)) {
+      visitValue(value.title);
+      visitValue(value.content);
+      return;
+    }
+    if (isTemplateResult(value)) {
+      visitTemplate(value);
+      return;
+    }
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      chunks.push(String(value));
     }
   }
 }
 
-function collectTemplateValues(template: TemplateResult): unknown[] {
-  const values: unknown[] = [];
-  visit(template);
-  return values;
-
-  function visit(current: unknown): void {
-    if (Array.isArray(current)) {
-      for (const item of current) visit(item);
-      return;
-    }
-    if (!isTemplateResult(current)) return;
-    for (const value of templateValues(current)) {
-      values.push(value);
-      visit(value);
-    }
+function expectTextOrder(content: string, labels: readonly string[]): void {
+  let previousIndex = -1;
+  for (const label of labels) {
+    const currentIndex = content.indexOf(label, previousIndex + 1);
+    if (currentIndex === -1) throw new Error(`Expected rendered content to include ${label}`);
+    expect(currentIndex).toBeGreaterThan(previousIndex);
+    previousIndex = currentIndex;
   }
+}
+
+function countOccurrences(content: string, needle: string): number {
+  return content.split(needle).length - 1;
 }
 
 function templateStrings(template: TemplateResult): readonly string[] {
@@ -101,6 +142,10 @@ function templateValues(template: TemplateResult): readonly unknown[] {
 
 function isTemplateResult(value: unknown): value is TemplateResult {
   return typeof value === "object" && value !== null && isStringArray(Reflect.get(value, "strings")) && Array.isArray(Reflect.get(value, "values"));
+}
+
+function isSettingsNotice(value: unknown): value is SettingsNotice {
+  return typeof value === "object" && value !== null && typeof Reflect.get(value, "type") === "string" && Reflect.has(value, "content");
 }
 
 function isStringArray(value: unknown): value is string[] {

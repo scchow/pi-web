@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { TemplateResult } from "lit";
 import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import { configApi, pluginsApi, type Machine, type MachineRuntime, type PiWebConfigResponse, type PiWebConfigValues, type PiWebPluginInfo, type PiWebPluginsResponse } from "../api";
 import { SettingsDialog } from "./SettingsDialog";
@@ -146,12 +147,16 @@ describe("settings-dialog session daemon machine targeting", () => {
 });
 
 describe("settings-dialog general settings machine targeting", () => {
-  it("describes the General tab as gateway server plus selected-machine file/upload settings", () => {
+  it("renders the active settings panel without the old global scope note", () => {
     const dialog = new SettingsDialog();
     dialog.section = "general";
     dialog.machine = remoteMachine;
 
-    expect(callDialogMethod(dialog, "settingsScopeMessage")).toBe("Gateway server config and selected machine file/upload config: Lab Mac (remote machine).");
+    const strings = collectTemplateStrings(dialog.render()).join("");
+
+    expect(strings).toContain("<settings-general-panel");
+    expect(strings).not.toContain("scope-note");
+    expect(strings).not.toContain("This tab edits:");
   });
 
   it("keeps gateway server config saves on the gateway config endpoint", async () => {
@@ -531,6 +536,43 @@ function callDialogMethod(dialog: SettingsDialog, methodName: string, ...args: r
 
 function isDialogMethod(value: unknown): value is (this: SettingsDialog, ...args: readonly unknown[]) => unknown {
   return typeof value === "function";
+}
+
+function collectTemplateStrings(template: TemplateResult): string[] {
+  const strings: string[] = [];
+  visitTemplate(template);
+  return strings;
+
+  function visitTemplate(current: TemplateResult): void {
+    strings.push(...templateStrings(current));
+    for (const value of templateValues(current)) {
+      if (Array.isArray(value)) {
+        for (const item of value) if (isTemplateResult(item)) visitTemplate(item);
+      } else if (isTemplateResult(value)) {
+        visitTemplate(value);
+      }
+    }
+  }
+}
+
+function templateStrings(template: TemplateResult): readonly string[] {
+  const strings = Reflect.get(template, "strings");
+  if (!isStringArray(strings)) throw new Error("TemplateResult strings were unavailable");
+  return strings;
+}
+
+function templateValues(template: TemplateResult): readonly unknown[] {
+  const values = Reflect.get(template, "values");
+  if (!Array.isArray(values)) throw new Error("TemplateResult values were unavailable");
+  return values.map((value: unknown) => value);
+}
+
+function isTemplateResult(value: unknown): value is TemplateResult {
+  return typeof value === "object" && value !== null && isStringArray(Reflect.get(value, "strings")) && Array.isArray(Reflect.get(value, "values"));
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item: unknown) => typeof item === "string");
 }
 
 function configResponse(config: PiWebConfigValues): PiWebConfigResponse {

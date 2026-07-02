@@ -1,61 +1,50 @@
 import { describe, expect, it } from "vitest";
 import type { TemplateResult } from "lit";
 import type { PiWebConfigResponse, PiWebConfigValues } from "../../api";
-import { SettingsSessiondPanel } from "./SettingsSessiondPanel";
+import { SettingsShortcutsPanel } from "./SettingsShortcutsPanel";
 import type { SettingsNotice } from "./SettingsPanelFrame";
 
-describe("settings-sessiond-panel layout", () => {
-  it("names the selected machine in the scope and restart notice when config is available", () => {
-    const panel = new SettingsSessiondPanel();
-    panel.targetLabel = "Lab Mac (remote machine)";
-    panel.configResponse = configResponse({ spawnSessions: true, subsessions: false });
+describe("settings-shortcuts-panel layout", () => {
+  it("renders header, ordered notices, and shortcut settings through the shared frame", () => {
+    const panel = new SettingsShortcutsPanel();
+    panel.configResponse = configResponse({ shortcuts: {} });
+    panel.error = "Failed to load shortcut settings.";
+    panel.savedMessage = "Shortcut settings saved.";
 
-    const rendered = flattenTemplateContent(panel.render());
+    const template = panel.render();
+    const rendered = flattenTemplateContent(template);
 
+    expect(rendered).toContain("<settings-panel-frame");
+    expect(frameNotices(template).map((notice) => notice.type)).toEqual(["error", "success"]);
     expectTextOrder(rendered, [
-      "Session daemon",
-      "These settings affect the long-lived session runtime on Lab Mac (remote machine).",
+      "Keyboard shortcuts",
+      "Edit app shortcuts by action.",
+      "<code>mod+k</code>",
       "Reload",
-      "Restart required on Lab Mac (remote machine)",
-      "run <code>pi-web restart</code> on that machine",
+      "Failed to load shortcut settings.",
+      "Shortcut settings saved.",
+      "Chat composer",
       "Config file",
-      "Allow agents to start sessions",
+      "No actions registered.",
     ]);
   });
 
-  it("orders save/load notices before the restart notice and settings content", () => {
-    const panel = new SettingsSessiondPanel();
-    panel.configResponse = configResponse({ spawnSessions: false });
-    panel.error = "Failed to save session-daemon config.";
-    panel.savedMessage = "Session daemon settings saved.";
+  it("keeps the prompt-enter card before the loading shortcuts state", () => {
+    const panel = new SettingsShortcutsPanel();
+    panel.loading = true;
 
     const rendered = flattenTemplateContent(panel.render());
 
-    expectTextOrder(rendered, [
-      "Failed to save session-daemon config.",
-      "Session daemon settings saved.",
-      "Restart required on local (local gateway)",
-      "Config file",
-    ]);
-  });
-
-  it("shows one blocked content state without restart guidance or toggles when config is unavailable", () => {
-    const panel = new SettingsSessiondPanel();
-    panel.targetLabel = "Lab Mac (remote machine)";
-    panel.error = "Selected-machine settings are not available on Lab Mac.";
-
-    const rendered = flattenTemplateContent(panel.render());
-
-    expectTextOrder(rendered, [
-      "Selected-machine settings are not available on Lab Mac.",
-      "Configuration is unavailable. Reload to try again.",
-    ]);
-    expect(countOccurrences(rendered, "Configuration is unavailable. Reload to try again.")).toBe(1);
-    expect(rendered).not.toContain("Restart required on");
-    expect(rendered).not.toContain("Allow agents to start sessions");
-    expect(rendered).not.toContain("Effective after environment overrides");
+    expectTextOrder(rendered, ["Keyboard shortcuts", "Chat composer", "Loading shortcuts…"]);
+    expect(rendered).not.toContain("Config file");
   });
 });
+
+function frameNotices(template: TemplateResult): readonly SettingsNotice[] {
+  const notices = collectTemplateValues(template).find(isSettingsNoticeArray);
+  if (notices === undefined) throw new Error("Expected settings-panel-frame notices to be rendered");
+  return notices;
+}
 
 function flattenTemplateContent(template: TemplateResult): string {
   const chunks: string[] = [];
@@ -94,6 +83,24 @@ function flattenTemplateContent(template: TemplateResult): string {
   }
 }
 
+function collectTemplateValues(template: TemplateResult): unknown[] {
+  const values: unknown[] = [];
+  visit(template);
+  return values;
+
+  function visit(current: unknown): void {
+    if (Array.isArray(current)) {
+      for (const item of current) visit(item);
+      return;
+    }
+    if (!isTemplateResult(current)) return;
+    for (const value of templateValues(current)) {
+      values.push(value);
+      visit(value);
+    }
+  }
+}
+
 function expectTextOrder(content: string, labels: readonly string[]): void {
   let previousIndex = -1;
   for (const label of labels) {
@@ -102,10 +109,6 @@ function expectTextOrder(content: string, labels: readonly string[]): void {
     expect(currentIndex).toBeGreaterThan(previousIndex);
     previousIndex = currentIndex;
   }
-}
-
-function countOccurrences(content: string, needle: string): number {
-  return content.split(needle).length - 1;
 }
 
 function templateStrings(template: TemplateResult): readonly string[] {
@@ -126,6 +129,10 @@ function isTemplateResult(value: unknown): value is TemplateResult {
 
 function isSettingsNotice(value: unknown): value is SettingsNotice {
   return typeof value === "object" && value !== null && typeof Reflect.get(value, "type") === "string" && Reflect.has(value, "content");
+}
+
+function isSettingsNoticeArray(value: unknown): value is readonly SettingsNotice[] {
+  return Array.isArray(value) && value.every(isSettingsNotice);
 }
 
 function isStringArray(value: unknown): value is string[] {
