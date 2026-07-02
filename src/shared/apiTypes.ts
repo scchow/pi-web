@@ -3,9 +3,13 @@ export type MachineStatus = "unknown" | "online" | "offline" | "error";
 
 export const PI_WEB_CAPABILITIES = {
   sessionsDeleteArchived: "sessions.deleteArchived",
+  sessionsBulkMutations: "sessions.bulkMutations",
+  sessionsCleanup: "sessions.cleanup",
   sessionsReload: "sessions.reload",
   promptAttachments: "prompt.attachments",
   workspaceFileSuggestions: "workspace.fileSuggestions",
+  piPackagesManage: "piPackages.manage",
+  selectedMachineSettings: "settings.selectedMachine",
 } as const;
 
 export type PiWebCapability = typeof PI_WEB_CAPABILITIES[keyof typeof PI_WEB_CAPABILITIES];
@@ -98,6 +102,43 @@ export interface PiWebPluginsResponse {
   plugins: PiWebPluginInfo[];
 }
 
+export type PiPackageScope = "user" | "project";
+
+export interface PiPackageInfo {
+  source: string;
+  scope: PiPackageScope;
+  filtered: boolean;
+  installedPath?: string;
+}
+
+export interface PiPackagesResponse {
+  packages: PiPackageInfo[];
+}
+
+export interface PiPackageInstallRequest {
+  source: string;
+}
+
+export interface PiPackageRemoveRequest {
+  source: string;
+  /** Optional known scope from a listed package; not an install-location picker. */
+  scope?: PiPackageScope;
+}
+
+export interface PiPackageUpdateRequest {
+  /** Omit to update all configured Pi packages. */
+  source?: string;
+}
+
+export type PiPackageMutationAction = "install" | "remove" | "update";
+
+export interface PiPackageMutationResponse extends PiPackagesResponse {
+  action: PiPackageMutationAction;
+  source?: string;
+  scope?: PiPackageScope;
+  removed?: boolean;
+}
+
 export interface PiWebConfigEnvOverrides {
   host: boolean;
   port: boolean;
@@ -145,6 +186,8 @@ export interface SessionRef {
 
 export interface SessionInfo extends SessionRef {
   path: string;
+  /** True when the server has verified a backing session file exists; false when known transient. */
+  persisted?: boolean;
   name?: string;
   created: string;
   modified: string;
@@ -162,6 +205,72 @@ export interface ArchiveSessionsResponse {
   skippedAlreadyArchivedCount?: number;
 }
 
+export interface SessionBulkMutationRef {
+  id: string;
+  cwd?: string;
+}
+
+export interface SessionBulkMutationRequest {
+  sessions: SessionBulkMutationRef[];
+}
+
+export interface SessionBulkFailure {
+  sessionId: string;
+  error: string;
+}
+
+export interface SessionBulkArchiveResponse {
+  archived: true;
+  archivedSessionIds: string[];
+  failures: SessionBulkFailure[];
+  generatedAt: string;
+}
+
+export interface SessionBulkDeleteArchivedResponse {
+  deleted: true;
+  deletedSessionIds: string[];
+  failures: SessionBulkFailure[];
+  generatedAt: string;
+}
+
+export interface SessionCleanupRequest {
+  /** Archive non-archived sessions whose modified time is older than this many days. Omit/null to disable. */
+  archiveIdleDays?: number | null;
+  /** Permanently delete archived sessions whose archivedAt time is older than this many days. Omit/null to disable. */
+  deleteArchivedDays?: number | null;
+  /** Stored cwd paths selected from a preview. Omit/null to include all discovered project/workspace paths. */
+  projectCwds?: string[] | null;
+}
+
+export interface SessionCleanupThresholds {
+  archiveIdleDays?: number;
+  deleteArchivedDays?: number;
+}
+
+export interface SessionCleanupProjectSummary {
+  cwd: string;
+  archiveCount: number;
+  deleteCount: number;
+}
+
+export interface SessionCleanupTotals {
+  archiveCount: number;
+  deleteCount: number;
+}
+
+export interface SessionCleanupPreviewResponse {
+  generatedAt: string;
+  thresholds: SessionCleanupThresholds;
+  projects: SessionCleanupProjectSummary[];
+  totals: SessionCleanupTotals;
+  skippedBusySessionIds?: string[];
+}
+
+export interface SessionCleanupExecuteResponse extends SessionCleanupPreviewResponse {
+  archivedSessionIds: string[];
+  deletedSessionIds: string[];
+}
+
 export interface SessionActivity {
   sessionId: string;
   phase: "active" | "idle" | "error";
@@ -176,20 +285,32 @@ export interface QueuedSessionMessage {
 }
 
 /**
- * A binary attachment carried with a prompt. The wire format mirrors pi's own
- * `ImageContent` shape (`{ type: "image", data, mimeType }`) so attachments are
- * fully compatible with the underlying pi coding agent.
+ * A pi-native image attachment carried with a prompt. The wire format mirrors
+ * pi's own `ImageContent` shape (`{ type: "image", data, mimeType }`) so these
+ * attachments are compatible with native multimodal delivery after validation.
  */
-export interface PromptAttachment {
-  /** Kind of attachment. Only images are supported by pi today. */
+export interface PromptImageAttachment {
   kind: "image";
-  /** IANA mime type (for example "image/png"). */
+  /** Supported image MIME type (image/png, image/jpeg, image/gif, or image/webp). */
   mimeType: string;
   /** Base64-encoded binary payload (no data: URL prefix). */
   data: string;
   /** Optional original filename, used for previews and folder-mode filenames. */
   name?: string;
 }
+
+/** A general file attachment that must be saved into the workspace before use. */
+export interface PromptFileAttachment {
+  kind: "file";
+  /** Non-empty IANA MIME type (for example "application/pdf"). */
+  mimeType: string;
+  /** Base64-encoded binary payload (no data: URL prefix). Empty for zero-byte files. */
+  data: string;
+  /** Optional original filename, used for previews and folder-mode filenames. */
+  name?: string;
+}
+
+export type PromptAttachment = PromptImageAttachment | PromptFileAttachment;
 
 /**
  * How prompt attachments should be delivered to the session.
@@ -261,6 +382,8 @@ export interface ThinkingLevelsResponse {
 
 export interface SessionStatus {
   sessionId: string;
+  /** True when the server has verified a backing session file exists; false when known transient. */
+  persisted?: boolean;
   model?: SessionModel;
   thinkingLevel?: string;
   isStreaming: boolean;

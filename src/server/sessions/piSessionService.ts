@@ -1,5 +1,7 @@
+import { statSync } from "node:fs";
 import { open, readFile, writeFile } from "node:fs/promises";
-import type { Api, ImageContent, Model } from "@earendil-works/pi-ai";
+import type { ImageContent } from "@earendil-works/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import {
   AuthStorage,
   createAgentSessionFromServices,
@@ -13,7 +15,7 @@ import {
   type CreateAgentSessionRuntimeFactory,
   type EditToolDetails,
 } from "@earendil-works/pi-coding-agent";
-import type { ClientArchiveSessionsResponse, ClientCommand, ClientCommandResult, ClientMessagePage, ClientSession, ClientSessionModel, ClientSessionRef, ClientSessionStatus, ClientThinkingLevel, SessionUiEvent } from "../types.js";
+import type { ClientArchiveSessionsResponse, ClientCommand, ClientCommandResult, ClientMessagePage, ClientSession, ClientSessionCleanupExecuteResponse, ClientSessionCleanupPreviewResponse, ClientSessionModel, ClientSessionRef, ClientSessionStatus, ClientThinkingLevel, SessionUiEvent } from "../types.js";
 import { pageMessagesAtSafeBoundary } from "./messagePaging.js";
 import type { SessionEventHub } from "../realtime/sessionEventHub.js";
 import { BUILTIN_COMMANDS } from "./builtinCommands.js";
@@ -27,13 +29,14 @@ import { computeEditPreview, type EditPreviewResult } from "./editPreview.js";
 import { createPiSessionManagerGateway } from "./piSessionManagerGateway.js";
 import { attachmentsToInlineImages, saveAttachmentsToWorkspace } from "./attachmentService.js";
 import { parsePromptAttachments } from "../../shared/promptAttachments.js";
-import type { SavedPromptAttachment } from "../../shared/apiTypes.js";
+import type { SavedPromptAttachment, SessionBulkArchiveResponse, SessionBulkDeleteArchivedResponse, SessionBulkFailure, SessionBulkMutationRef } from "../../shared/apiTypes.js";
 
 import { cwdPathsEqual } from "../workingDirectory.js";
 import type { WorkspaceActivityService } from "../activity/workspaceActivityService.js";
 import { createSpawnSessionToolDefinition, type SpawnSessionInvocation, type SpawnSessionResult } from "./spawnSessionTool.js";
 import { createSubsessionToolDefinitions, type SpawnSubsessionInvocation, type SpawnSubsessionResult, type SubsessionCheckResult, type SubsessionReadQuery, type SubsessionReadResult, type SubsessionStatus, type SubsessionSummary, type SubsessionToolDeps } from "./spawnSubsessionTool.js";
 import { buildTranscriptView } from "./subsessionTranscript.js";
+import { planSessionCleanup, summarizeSessionCleanupExecution, type NormalizedSessionCleanupRequest, type SessionCleanupPlan } from "./sessionCleanup.js";
 import type { SpawnTargetDecision, SpawnTargetResolver } from "./spawnTargetResolver.js";
 
 /**
@@ -101,6 +104,11 @@ interface PersistedChildSubsessionLink {
   spawnedSessionId: string;
 }
 
+interface StartSessionOptions {
+  parentSession?: string;
+  initialModel?: AgentModel;
+}
+
 function requirePromptText(value: unknown): string {
   if (typeof value !== "string") throw new Error("Prompt text is required");
   return value;
@@ -112,7 +120,11 @@ function parsePromptStreamingBehavior(value: unknown): QueuedPromptKind | undefi
   throw new Error('Prompt streamingBehavior must be "steer" or "followUp"');
 }
 
-type SessionArchiveRepository = Pick<SessionArchiveStore, "list" | "get" | "archive" | "restore" | "isArchived"> & { deleteArchived?: (sessionId: string) => Promise<void> };
+type SessionArchiveRepository = Pick<SessionArchiveStore, "list" | "get" | "archive" | "restore" | "isArchived"> & {
+  archiveMany?: (sessions: readonly ArchiveSessionInput[]) => Promise<ArchivedSessionRecord[]>;
+  deleteArchived?: (sessionId: string) => Promise<void>;
+  deleteArchivedMany?: (sessionIds: readonly string[]) => Promise<string[]>;
+};
 
 export type PiSessionRef = ClientSessionRef;
 
@@ -137,7 +149,20 @@ interface WorkspaceArchiveCandidate extends SessionArchiveTreeCandidate {
   activeSession?: PiAgentSession;
 }
 
-type AgentModel = Model<Api>;
+interface BulkSessionLookupContext {
+  sessionsByCwd: Map<string, PiSessionListEntry[]>;
+  allSessions?: readonly PiSessionListEntry[];
+}
+
+interface BulkArchivePlanItem {
+  input: ArchiveSessionInput;
+}
+
+interface BulkDeletePlanItem {
+  record: ArchivedSessionRecord;
+}
+
+type AgentModel = NonNullable<SpawnSessionInvocation["model"]>;
 type ModelRegistryInstance = ReturnType<typeof ModelRegistry.create>;
 
 export interface PiSessionManager {
@@ -194,6 +219,7 @@ export interface PiAgentSession {
   compact(instructions?: string): Promise<{ summary: string; tokensBefore: number }>;
   getUserMessagesForForking(): readonly { entryId: string; text: string }[];
   getSessionStats(): { sessionId: string; totalMessages: number; userMessages: number; assistantMessages: number; toolCalls: number; tokens: ClientSessionStatus["tokens"]; cost: number };
+  reload(): Promise<void>;
   getContextUsage(): ClientSessionStatus["contextUsage"] | undefined;
   prompt(text: string, options?: { streamingBehavior?: "steer" | "followUp"; images?: ImageContent[] }): Promise<void>;
   sendCustomMessage(message: { customType: string; content: string; display: boolean; details?: unknown }, options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" }): Promise<void>;
@@ -208,6 +234,15 @@ export interface PiAgentSession {
   setThinkingLevel(level: ClientThinkingLevel): void;
   cycleThinkingLevel(): ClientThinkingLevel | undefined;
   setSessionName(name: string): void;
+  /**
+   * Narrow re-expression of `AgentSession.agent` (an `@earendil-works/pi-agent-core`
+   * `Agent`), exposing only `streamFn` — the resolved-auth/headers/retry "call this
+   * model" function pi's own compaction/branch-summarization code uses internally.
+   * Lets callers (e.g. session title generation) issue one-off model calls without
+   * depending on pi-ai's deprecated `/compat` provider registry or leaking the full
+   * `Agent`/`AgentSession` surface.
+   */
+  agent: { streamFn: StreamFn };
 }
 
 export interface PiSessionRuntime {
@@ -222,29 +257,56 @@ interface CreateAgentRuntimeOptions {
   cwd: string;
   agentDir: string;
   sessionManager: PiSessionManager;
+  initialModel?: AgentModel;
 }
 
-type CreateAgentRuntime = (createRuntime: CreateAgentSessionRuntimeFactory, options: CreateAgentRuntimeOptions) => Promise<PiSessionRuntime>;
+type PiWebCreateAgentSessionRuntimeFactory = (
+  options: Parameters<CreateAgentSessionRuntimeFactory>[0] & { initialModel?: AgentModel }
+) => ReturnType<CreateAgentSessionRuntimeFactory>;
 
-function defaultCreateAgentRuntime(createRuntime: CreateAgentSessionRuntimeFactory, options: CreateAgentRuntimeOptions): Promise<PiSessionRuntime> {
+type CreateAgentRuntime = (createRuntime: PiWebCreateAgentSessionRuntimeFactory, options: CreateAgentRuntimeOptions) => Promise<PiSessionRuntime>;
+
+function defaultCreateAgentRuntime(createRuntime: PiWebCreateAgentSessionRuntimeFactory, options: CreateAgentRuntimeOptions): Promise<PiSessionRuntime> {
   if (!(options.sessionManager instanceof SessionManager)) throw new Error("Default runtime creation requires an SDK SessionManager");
-  return createAgentSessionRuntime(createRuntime, { ...options, sessionManager: options.sessionManager });
+  const runtimeFactory = createRuntimeWithOneShotInitialModel(createRuntime, options.initialModel);
+  return createAgentSessionRuntime(runtimeFactory, {
+    cwd: options.cwd,
+    agentDir: options.agentDir,
+    sessionManager: options.sessionManager,
+  });
+}
+
+function createRuntimeWithOneShotInitialModel(createRuntime: PiWebCreateAgentSessionRuntimeFactory, initialModel: AgentModel | undefined): CreateAgentSessionRuntimeFactory {
+  // The inherited model belongs only to the session being spawned. Do not keep
+  // reapplying it if that runtime later creates/forks/switches sessions itself.
+  let pendingInitialModel = initialModel;
+  return async (options) => {
+    const model = pendingInitialModel;
+    pendingInitialModel = undefined;
+    return createRuntime({
+      ...options,
+      ...(model === undefined ? {} : { initialModel: model }),
+    });
+  };
 }
 
 type SpawnSessionFn = (input: SpawnSessionInvocation) => Promise<SpawnSessionResult>;
 
-function createDefaultRuntimeFactory(authStorage: AuthStorage, modelRegistry: ModelRegistryInstance, spawn?: SpawnSessionFn, subsessions?: SubsessionToolDeps): CreateAgentSessionRuntimeFactory {
-  return async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
+function createDefaultRuntimeFactory(authStorage: AuthStorage, modelRegistry: ModelRegistryInstance, spawn?: SpawnSessionFn, subsessions?: SubsessionToolDeps): PiWebCreateAgentSessionRuntimeFactory {
+  return async ({ cwd, agentDir, sessionManager, sessionStartEvent, initialModel }) => {
     const services = await createAgentSessionServices({ cwd, agentDir, authStorage, modelRegistry });
     const customTools = [
       createPiWebEditToolDefinition(cwd),
       ...(spawn === undefined ? [] : [createSpawnSessionToolDefinition(cwd, { spawn })]),
       ...(subsessions === undefined ? [] : createSubsessionToolDefinitions(cwd, subsessions)),
     ];
-    const options = sessionStartEvent === undefined
-      ? { services, sessionManager, customTools }
-      : { services, sessionManager, sessionStartEvent, customTools };
-    const result = await createAgentSessionFromServices(options);
+    const result = await createAgentSessionFromServices({
+      services,
+      sessionManager,
+      customTools,
+      ...(sessionStartEvent === undefined ? {} : { sessionStartEvent }),
+      ...(initialModel === undefined ? {} : { model: initialModel }),
+    });
     return { ...result, services, diagnostics: services.diagnostics };
   };
 }
@@ -277,7 +339,7 @@ export interface PiSessionServiceDependencies {
   archiveStore?: SessionArchiveRepository;
   agentDir?: string;
   sessionManager?: PiSessionManagerGateway;
-  createRuntime?: CreateAgentSessionRuntimeFactory;
+  createRuntime?: PiWebCreateAgentSessionRuntimeFactory;
   createAgentRuntime?: CreateAgentRuntime;
   modelRegistry?: ModelRegistryInstance;
   heartbeatIntervalMs?: number;
@@ -298,6 +360,8 @@ export interface PiSessionServiceDependencies {
   subsessionsEnabled?: boolean;
   /** Structured logger for notable runtime events (e.g. spawns). */
   logger?: PiSessionLogger;
+  /** Clock seam for cleanup planning tests. */
+  now?: () => Date;
 }
 
 export class PiSessionService {
@@ -325,12 +389,13 @@ export class PiSessionService {
   private readonly archiveStore: SessionArchiveRepository;
   private readonly agentDir: string;
   private readonly sessionManager: PiSessionManagerGateway;
-  private readonly createRuntime: CreateAgentSessionRuntimeFactory;
+  private readonly createRuntime: PiWebCreateAgentSessionRuntimeFactory;
   private readonly createAgentRuntime: CreateAgentRuntime;
   private readonly modelRegistry: ModelRegistryInstance;
   private readonly workspaceActivity: Pick<WorkspaceActivityService, "applySessionStatus" | "applySessionActivity" | "removeSession" | "reconcileSessionActivity"> | undefined;
   private readonly spawnTargets: SpawnTargetResolver | undefined;
   private readonly logger: PiSessionLogger;
+  private readonly now: () => Date;
 
   constructor(private readonly events: SessionEventHub, deps: PiSessionServiceDependencies = {}) {
     this.archiveStore = deps.archiveStore ?? new SessionArchiveStore();
@@ -339,6 +404,7 @@ export class PiSessionService {
     this.modelRegistry = deps.modelRegistry ?? ModelRegistry.create(AuthStorage.create());
     this.spawnTargets = deps.spawnTargets;
     this.logger = deps.logger ?? noopLogger;
+    this.now = deps.now ?? (() => new Date());
     // Subsessions are a beta capability gated behind their own flag, and they
     // also require the spawn capability (they share its project-scope resolver).
     const subsessionsActive = this.spawnTargets !== undefined && deps.subsessionsEnabled === true;
@@ -369,6 +435,7 @@ export class PiSessionService {
           this.publishActivity(session, result === "success" ? "compaction complete" : "compaction failed", result === "success" ? "idle" : "error", detail);
           this.publishStatus(session);
         },
+        reloadSession: (session) => this.reloadSessionRuntime(session),
       },
       { listSessionNames: (cwd) => this.listSessionNames(cwd) },
     );
@@ -376,6 +443,52 @@ export class PiSessionService {
 
   activeCount(): number {
     return this.active.size;
+  }
+
+  async cleanupPreview(request: NormalizedSessionCleanupRequest): Promise<ClientSessionCleanupPreviewResponse> {
+    return previewResponseFromPlan(await this.cleanupPlan(request));
+  }
+
+  async cleanup(request: NormalizedSessionCleanupRequest): Promise<ClientSessionCleanupExecuteResponse> {
+    const plan = await this.cleanupPlan(request);
+    if (plan.deleteRecords.length > 0 && this.archiveStore.deleteArchived === undefined && this.archiveStore.deleteArchivedMany === undefined) throw new Error("Archive store does not support deletion");
+
+    const archiveInputs: ArchiveSessionInput[] = [];
+    const readyArchiveInputs: ArchiveSessionInput[] = [];
+    const deleteRecords: ArchivedSessionRecord[] = [];
+    const readyDeleteRecords: ArchivedSessionRecord[] = [];
+    const skippedBusySessionIds = new Set(plan.skippedBusySessionIds);
+
+    for (const input of plan.archiveInputs) {
+      if (this.activeSessionHasWork(input.sessionId)) {
+        skippedBusySessionIds.add(input.sessionId);
+        continue;
+      }
+      await this.closeActive(input.sessionId);
+      readyArchiveInputs.push(input);
+    }
+    await this.archiveStoreArchiveMany(readyArchiveInputs);
+    archiveInputs.push(...readyArchiveInputs);
+
+    for (const record of plan.deleteRecords) {
+      if (this.activeSessionHasWork(record.sessionId)) {
+        skippedBusySessionIds.add(record.sessionId);
+        continue;
+      }
+      await this.closeActive(record.sessionId);
+      readyDeleteRecords.push(record);
+    }
+    await this.ensureArchivedRecordsMoved(readyDeleteRecords);
+    const deletedSessionIds = new Set(await this.archiveStoreDeleteArchivedMany(readyDeleteRecords.map((record) => record.sessionId)));
+    deleteRecords.push(...readyDeleteRecords.filter((record) => deletedSessionIds.has(record.sessionId)));
+
+    return summarizeSessionCleanupExecution({
+      archiveInputs,
+      deleteRecords,
+      thresholds: plan.thresholds,
+      generatedAt: plan.generatedAt,
+      skippedBusySessionIds: [...skippedBusySessionIds],
+    });
   }
 
   async dispose(): Promise<void> {
@@ -417,20 +530,25 @@ export class PiSessionService {
     return [...unarchivedSessions, ...archivedSessions];
   }
 
-  async start(cwd: string, parentSession?: string): Promise<ClientSession> {
-    const active = await this.create(this.sessionManager.create(cwd, parentSession === undefined ? undefined : { parentSession }), cwd);
+  async start(cwd: string, options: StartSessionOptions = {}): Promise<ClientSession> {
+    const active = await this.create(
+      this.sessionManager.create(cwd, options.parentSession === undefined ? undefined : { parentSession: options.parentSession }),
+      cwd,
+      options.initialModel === undefined ? {} : { initialModel: options.initialModel },
+    );
     const { session } = active.runtime;
     const created: ClientSession = {
       id: session.sessionId,
       path: session.sessionFile ?? "",
       cwd,
+      persisted: sessionFileExists(session.sessionFile),
       created: new Date().toISOString(),
       modified: new Date().toISOString(),
       messageCount: session.messages.length,
       firstMessage: "",
       // Include the parent so listeners can nest the new session in the tree
       // immediately, instead of showing it flat until the next reload.
-      ...(parentSession === undefined ? {} : { parentSessionPath: parentSession }),
+      ...(options.parentSession === undefined ? {} : { parentSessionPath: options.parentSession }),
     };
     // Broadcast so other clients (and the spawning agent's UI) can add the new
     // session to their list without a manual reload.
@@ -447,7 +565,7 @@ export class PiSessionService {
     if (this.spawnTargets === undefined) throw new Error("Spawning sessions is disabled");
     const decision = await this.spawnTargets.resolveSpawnTarget(input.spawningCwd, input.cwd);
     if (!decision.allowed) throw spawnTargetError(decision);
-    const created = await this.start(decision.cwd);
+    const created = await this.start(decision.cwd, input.model === undefined ? {} : { initialModel: input.model });
     await this.prompt(created.id, input.prompt);
     this.logger.info(
       { spawningCwd: input.spawningCwd, sessionId: created.id, cwd: decision.cwd, promptLength: input.prompt.length },
@@ -466,7 +584,10 @@ export class PiSessionService {
     if (this.spawnTargets === undefined) throw new Error("Spawning sessions is disabled");
     const decision = await this.spawnTargets.resolveSpawnTarget(input.spawningCwd, input.cwd);
     if (!decision.allowed) throw spawnTargetError(decision);
-    const created = await this.start(decision.cwd, input.parentSessionFile);
+    const created = await this.start(decision.cwd, {
+      ...(input.parentSessionFile === undefined ? {} : { parentSession: input.parentSessionFile }),
+      ...(input.model === undefined ? {} : { initialModel: input.model }),
+    });
     const parentSessionFile = nonEmptyString(input.parentSessionFile);
     const link: TrackedSubsessionLink = {
       parentSessionId: input.parentSessionId,
@@ -957,7 +1078,7 @@ export class PiSessionService {
   }
 
   async saveAttachments(ref: PiSessionLookup, attachments: unknown, folder?: string): Promise<SavedPromptAttachment[]> {
-    const parsed = parsePromptAttachments(attachments, { enforceInlineSizeLimit: false });
+    const parsed = parsePromptAttachments(attachments, { enforceInlineSizeLimit: false, allowFileAttachments: true });
     if (parsed.length === 0) return [];
     await this.assertWritable(ref);
     const active = await this.getActive(ref);
@@ -1011,12 +1132,92 @@ export class PiSessionService {
     return this.commandService.respond(active.runtime.session.sessionId, requestId, value);
   }
 
+  private async reloadSessionRuntime(session: PiAgentSession): Promise<void> {
+    if (this.hasActiveWork(session)) throw new Error("Stop current session activity before reloading");
+    this.publishActivity(session, "reloading resources", "active");
+    try {
+      await session.reload();
+      this.publishActivity(session, "resources reloaded", "idle");
+      this.publishStatus(session);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.publishActivity(session, "reload failed", "error", message);
+      this.events.publish(session.sessionId, { type: "session.error", message });
+      this.publishStatus(session);
+      throw error;
+    }
+  }
+
   async archive(ref: PiSessionLookup): Promise<void> {
     const session = await this.getOrOpen(ref);
     if (this.hasActiveWork(session)) throw new Error("Stop current session activity before archiving");
     const archiveInput = await this.archiveInputForSession(session);
     await this.closeActive(session.sessionId);
     await this.archiveStore.archive(archiveInput);
+  }
+
+  async archiveMany(refs: readonly SessionBulkMutationRef[]): Promise<SessionBulkArchiveResponse> {
+    const uniqueRefs = uniqueBulkSessionRefs(refs);
+    const [archivedRecords, sessionContext] = await Promise.all([
+      this.archiveStore.list(),
+      this.bulkSessionLookupContext(uniqueRefs),
+    ]);
+    const failures: SessionBulkFailure[] = [];
+    const alreadyArchivedSessionIds: string[] = [];
+    const planItems: BulkArchivePlanItem[] = [];
+
+    for (const ref of uniqueRefs) {
+      const archived = findArchivedRecordForBulkRef(archivedRecords, ref);
+      if (archived !== undefined) {
+        alreadyArchivedSessionIds.push(archived.sessionId);
+        continue;
+      }
+
+      const active = this.activeForLookup(bulkRefToLookup(ref));
+      const listed = findListedSessionForBulkRef(sessionContext, ref);
+      const resolvedSessionId = active?.runtime.session.sessionId ?? listed?.id ?? ref.id;
+      if (active !== undefined && this.hasActiveWork(active.runtime.session)) {
+        failures.push({ sessionId: resolvedSessionId, error: "Stop current session activity before archiving" });
+        continue;
+      }
+
+      try {
+        if (listed !== undefined) {
+          planItems.push({ input: archiveInputFromListEntry(listed) });
+        } else if (active !== undefined) {
+          planItems.push({ input: archiveInputFromActiveSession(active.runtime.session) });
+        } else {
+          failures.push({ sessionId: ref.id, error: "Session not found" });
+        }
+      } catch (error: unknown) {
+        failures.push({ sessionId: resolvedSessionId, error: errorMessage(error) });
+      }
+    }
+
+    const readyInputs: ArchiveSessionInput[] = [];
+    for (const item of planItems) {
+      try {
+        await this.closeActive(item.input.sessionId);
+        readyInputs.push(item.input);
+      } catch (error: unknown) {
+        failures.push({ sessionId: item.input.sessionId, error: errorMessage(error) });
+      }
+    }
+
+    const archivedSessionIds = [...alreadyArchivedSessionIds];
+    try {
+      const archived = await this.archiveStoreArchiveMany(readyInputs);
+      archivedSessionIds.push(...archived.map((record) => record.sessionId));
+    } catch (error: unknown) {
+      for (const input of readyInputs) failures.push({ sessionId: input.sessionId, error: errorMessage(error) });
+    }
+
+    return {
+      archived: true,
+      archivedSessionIds: uniqueStrings(archivedSessionIds),
+      failures,
+      generatedAt: new Date().toISOString(),
+    };
   }
 
   async archiveTree(ref: PiSessionLookup): Promise<ClientArchiveSessionsResponse> {
@@ -1029,7 +1230,7 @@ export class PiSessionService {
 
     const archiveInputs = plan.unarchivedTargets.map((target) => archiveInputFromCandidate(target));
     for (const input of archiveInputs) await this.closeActive(input.sessionId);
-    for (const input of archiveInputs) await this.archiveStore.archive(input);
+    await this.archiveStoreArchiveMany(archiveInputs);
 
     return {
       archived: true,
@@ -1054,6 +1255,61 @@ export class PiSessionService {
     await this.closeActive(record.sessionId);
     if (record.archivePath === undefined) await this.ensureArchivedRecordMoved(record);
     await this.archiveStore.deleteArchived(record.sessionId);
+  }
+
+  async deleteArchivedMany(refs: readonly SessionBulkMutationRef[]): Promise<SessionBulkDeleteArchivedResponse> {
+    if (this.archiveStore.deleteArchived === undefined && this.archiveStore.deleteArchivedMany === undefined) throw new Error("Archive store does not support deletion");
+
+    const uniqueRefs = uniqueBulkSessionRefs(refs);
+    const archivedRecords = await this.archiveStore.list();
+    const failures: SessionBulkFailure[] = [];
+    const planItems: BulkDeletePlanItem[] = [];
+
+    for (const ref of uniqueRefs) {
+      const record = findArchivedRecordForBulkRef(archivedRecords, ref);
+      if (record === undefined) {
+        failures.push({ sessionId: ref.id, error: "Archived session not found" });
+        continue;
+      }
+
+      const active = this.activeForLookup({ id: record.sessionId, cwd: record.cwd });
+      if (active !== undefined && this.hasActiveWork(active.runtime.session)) {
+        failures.push({ sessionId: record.sessionId, error: "Stop current session activity before deleting archived session" });
+        continue;
+      }
+      planItems.push({ record });
+    }
+
+    const readyRecords: ArchivedSessionRecord[] = [];
+    for (const item of planItems) {
+      try {
+        await this.closeActive(item.record.sessionId);
+        readyRecords.push(item.record);
+      } catch (error: unknown) {
+        failures.push({ sessionId: item.record.sessionId, error: errorMessage(error) });
+      }
+    }
+
+    const moveFailures = await this.moveLegacyArchivedRecordsForDelete(readyRecords);
+    failures.push(...moveFailures);
+    const moveFailureIds = new Set(moveFailures.map((failure) => failure.sessionId));
+    const deleteIds = readyRecords
+      .map((record) => record.sessionId)
+      .filter((sessionId) => !moveFailureIds.has(sessionId));
+
+    let deletedSessionIds: string[] = [];
+    try {
+      deletedSessionIds = await this.archiveStoreDeleteArchivedMany(deleteIds);
+    } catch (error: unknown) {
+      for (const sessionId of deleteIds) failures.push({ sessionId, error: errorMessage(error) });
+    }
+
+    return {
+      deleted: true,
+      deletedSessionIds,
+      failures,
+      generatedAt: new Date().toISOString(),
+    };
   }
 
   async reload(ref: PiSessionLookup): Promise<void> {
@@ -1093,6 +1349,95 @@ export class PiSessionService {
     });
   }
 
+  private async bulkSessionLookupContext(refs: readonly SessionBulkMutationRef[]): Promise<BulkSessionLookupContext> {
+    const cwdSet = new Set<string>();
+    let needsAllSessions = false;
+    for (const ref of refs) {
+      if (ref.cwd === undefined) needsAllSessions = true;
+      else cwdSet.add(ref.cwd);
+    }
+
+    const [sessionsByCwd, allSessions] = await Promise.all([
+      this.listSessionsByCwd([...cwdSet]),
+      needsAllSessions ? this.sessionManager.listAll?.() ?? Promise.resolve([]) : Promise.resolve(undefined),
+    ]);
+    return allSessions === undefined ? { sessionsByCwd } : { sessionsByCwd, allSessions };
+  }
+
+  private async listSessionsByCwd(cwds: readonly string[]): Promise<Map<string, PiSessionListEntry[]>> {
+    const uniqueCwds = uniqueStrings(cwds);
+    const entries = await Promise.all(uniqueCwds.map(async (cwd) => [cwd, await this.sessionManager.list(cwd)] as const));
+    return new Map(entries);
+  }
+
+  private async archiveStoreArchiveMany(inputs: readonly ArchiveSessionInput[]): Promise<ArchivedSessionRecord[]> {
+    if (inputs.length === 0) return [];
+    if (this.archiveStore.archiveMany !== undefined) return this.archiveStore.archiveMany(inputs);
+    const records: ArchivedSessionRecord[] = [];
+    for (const input of inputs) records.push(await this.archiveStore.archive(input));
+    return records;
+  }
+
+  private async archiveStoreDeleteArchivedMany(sessionIds: readonly string[]): Promise<string[]> {
+    if (sessionIds.length === 0) return [];
+    if (this.archiveStore.deleteArchivedMany !== undefined) return this.archiveStore.deleteArchivedMany(sessionIds);
+    if (this.archiveStore.deleteArchived === undefined) throw new Error("Archive store does not support deletion");
+    for (const sessionId of sessionIds) await this.archiveStore.deleteArchived(sessionId);
+    return [...sessionIds];
+  }
+
+  private async moveLegacyArchivedRecordsForDelete(records: readonly ArchivedSessionRecord[]): Promise<SessionBulkFailure[]> {
+    const legacyRecords = records.filter((record) => record.archivePath === undefined);
+    if (legacyRecords.length === 0) return [];
+
+    let sessionsByCwd: Map<string, PiSessionListEntry[]>;
+    try {
+      sessionsByCwd = await this.listSessionsByCwd(legacyRecords.map((record) => record.cwd));
+    } catch (error: unknown) {
+      return legacyRecords.map((record) => ({ sessionId: record.sessionId, error: errorMessage(error) }));
+    }
+
+    const moveInputs = legacyRecords
+      .map((record) => findSessionByIdOrPrefix(sessionsByCwd.get(record.cwd) ?? [], record.sessionId))
+      .filter(isDefined)
+      .map(archiveInputFromListEntry);
+    if (moveInputs.length === 0) return [];
+
+    try {
+      await this.archiveStoreArchiveMany(moveInputs);
+      return [];
+    } catch (error: unknown) {
+      const failedIds = new Set(moveInputs.map((input) => input.sessionId));
+      return legacyRecords
+        .filter((record) => failedIds.has(record.sessionId))
+        .map((record) => ({ sessionId: record.sessionId, error: errorMessage(error) }));
+    }
+  }
+
+  private async cleanupPlan(request: NormalizedSessionCleanupRequest) {
+    const [sessions, archivedRecords] = await Promise.all([this.sessionManager.listAll?.() ?? [], this.archiveStore.list()]);
+    return planSessionCleanup({
+      sessions,
+      archivedRecords,
+      activeSessions: this.cleanupActiveSessionStatuses(),
+      thresholds: request.thresholds,
+      ...(request.projectCwds === undefined ? {} : { projectCwds: request.projectCwds }),
+      now: this.now(),
+    });
+  }
+
+  private cleanupActiveSessionStatuses(): { sessionId: string; hasActiveWork: boolean }[] {
+    return [...new Set(this.active.values())].map((active) => ({
+      sessionId: active.runtime.session.sessionId,
+      hasActiveWork: this.hasActiveWork(active.runtime.session),
+    }));
+  }
+
+  private activeSessionHasWork(sessionId: string): boolean {
+    const active = this.active.get(sessionId);
+    return active !== undefined && this.hasActiveWork(active.runtime.session);
+  }
+
   private reconcilableSessionIds(cwd: string, listedSessionIds: string[], archivedById: Map<string, ArchivedSessionRecord>): string[] {
     const sessionIds = new Set(listedSessionIds);
     for (const active of new Set(this.active.values())) {
@@ -1114,7 +1459,20 @@ export class PiSessionService {
   private async ensureArchivedRecordMoved(record: ArchivedSessionRecord): Promise<ArchivedSessionRecord> {
     const session = (await this.sessionManager.list(record.cwd)).find((candidate) => candidate.id === record.sessionId);
     if (session === undefined) return record;
-    return this.archiveStore.archive(archiveInputFromListEntry(session));
+    const [moved] = await this.archiveStoreArchiveMany([archiveInputFromListEntry(session)]);
+    return moved ?? record;
+  }
+
+  private async ensureArchivedRecordsMoved(records: readonly ArchivedSessionRecord[]): Promise<void> {
+    const legacyRecords = records.filter((record) => record.archivePath === undefined);
+    if (legacyRecords.length === 0) return;
+
+    const sessionsByCwd = await this.listSessionsByCwd(legacyRecords.map((record) => record.cwd));
+    const moveInputs = legacyRecords
+      .map((record) => sessionsByCwd.get(record.cwd)?.find((candidate) => candidate.id === record.sessionId))
+      .filter(isDefined)
+      .map(archiveInputFromListEntry);
+    await this.archiveStoreArchiveMany(moveInputs);
   }
 
   private async archiveInputForSession(session: PiAgentSession): Promise<ArchiveSessionInput> {
@@ -1234,8 +1592,13 @@ export class PiSessionService {
     return undefined;
   }
 
-  private async create(sessionManager: PiSessionManager, cwd: string): Promise<ActiveSession<PiSessionRuntime>> {
-    const runtime = await this.createAgentRuntime(this.createRuntime, { cwd, agentDir: this.agentDir, sessionManager });
+  private async create(sessionManager: PiSessionManager, cwd: string, options: Pick<StartSessionOptions, "initialModel"> = {}): Promise<ActiveSession<PiSessionRuntime>> {
+    const runtime = await this.createAgentRuntime(this.createRuntime, {
+      cwd,
+      agentDir: this.agentDir,
+      sessionManager,
+      ...(options.initialModel === undefined ? {} : { initialModel: options.initialModel }),
+    });
     await this.bindSessionExtensions(runtime.session);
     const active: ActiveSession<PiSessionRuntime> = { runtime, unsubscribe: noop };
     this.bindRuntime(active);
@@ -1346,7 +1709,7 @@ export class PiSessionService {
     const model = session.model;
     if (model === undefined) return;
 
-    void generateShortSessionName(this.modelRegistry, model, firstMessage).then((name) => {
+    void generateShortSessionName(session.agent.streamFn, model, firstMessage).then((name) => {
       this.applyGeneratedSessionName(session, name ?? fallbackSessionName(firstMessage));
     }).catch(() => {
       this.applyGeneratedSessionName(session, fallbackSessionName(firstMessage));
@@ -1496,6 +1859,7 @@ export class PiSessionService {
     const contextUsage = session.getContextUsage();
     return {
       sessionId: session.sessionId,
+      persisted: sessionFileExists(session.sessionFile),
       ...(model === undefined ? {} : { model }),
       thinkingLevel: session.thinkingLevel,
       isStreaming: session.isStreaming,
@@ -1523,6 +1887,53 @@ export class PiSessionService {
   }
 }
 
+function previewResponseFromPlan(plan: SessionCleanupPlan): ClientSessionCleanupPreviewResponse {
+  return {
+    generatedAt: plan.generatedAt,
+    thresholds: plan.thresholds,
+    projects: plan.projects,
+    totals: plan.totals,
+    ...(plan.skippedBusySessionIds.length === 0 ? {} : { skippedBusySessionIds: plan.skippedBusySessionIds }),
+  };
+}
+
+function uniqueBulkSessionRefs(refs: readonly SessionBulkMutationRef[]): SessionBulkMutationRef[] {
+  const seen = new Set<string>();
+  const unique: SessionBulkMutationRef[] = [];
+  for (const ref of refs) {
+    const key = `${ref.cwd ?? ""}\0${ref.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(ref);
+  }
+  return unique;
+}
+
+function bulkRefToLookup(ref: SessionBulkMutationRef): PiSessionLookup {
+  return ref.cwd === undefined ? ref.id : { id: ref.id, cwd: ref.cwd };
+}
+
+function findArchivedRecordForBulkRef(records: readonly ArchivedSessionRecord[], ref: SessionBulkMutationRef): ArchivedSessionRecord | undefined {
+  return records.find((record) => (ref.cwd === undefined || record.cwd === ref.cwd) && (record.sessionId === ref.id || record.sessionId.startsWith(ref.id)));
+}
+
+function findListedSessionForBulkRef(context: BulkSessionLookupContext, ref: SessionBulkMutationRef): PiSessionListEntry | undefined {
+  if (ref.cwd !== undefined) return findSessionByIdOrPrefix(context.sessionsByCwd.get(ref.cwd) ?? [], ref.id);
+  return context.allSessions === undefined ? undefined : findSessionByIdOrPrefix(context.allSessions, ref.id);
+}
+
+function findSessionByIdOrPrefix(sessions: readonly PiSessionListEntry[], sessionId: string): PiSessionListEntry | undefined {
+  return sessions.find((session) => session.id === sessionId) ?? sessions.find((session) => session.id.startsWith(sessionId));
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values)];
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function modelToClientModel(model: PiAgentSession["model"]): ClientSessionModel {
   if (model === undefined) return {};
   const name = getString(model, "name");
@@ -1541,6 +1952,7 @@ function clientSessionFromListEntry(session: PiSessionListEntry): ClientSession 
     id: session.id,
     path: session.path,
     cwd: session.cwd,
+    persisted: true,
     ...(session.name === undefined ? {} : { name: session.name }),
     created: session.created.toISOString(),
     modified: session.modified.toISOString(),
@@ -1741,6 +2153,15 @@ function subsessionHydratedParentKey(parentSessionId: string, parentSessionFile:
 
 function sessionPathsEqual(a: string, b: string): boolean {
   return cwdPathsEqual(a, b);
+}
+
+function sessionFileExists(sessionFile: string | undefined): sessionFile is string {
+  if (sessionFile === undefined || sessionFile === "") return false;
+  try {
+    return statSync(sessionFile).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function sessionFileMatches(session: PiAgentSession, expectedSessionFile: string | undefined): boolean {

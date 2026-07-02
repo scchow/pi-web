@@ -1,6 +1,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { GlobalSessionEvent, SessionUiEvent } from "../../shared/apiTypes.js";
@@ -52,12 +54,18 @@ function sessionRef(id: string, cwd = "/workspace") {
   return { id, cwd };
 }
 
+function testModel(): NonNullable<PiAgentSession["model"]> {
+  const model = ModelRegistry.inMemory(AuthStorage.inMemory()).find("anthropic", "claude-3-5-sonnet-20241022");
+  if (model === undefined) throw new Error("test model not found");
+  return model;
+}
+
 function fakeRuntime(sessionId = "session-1", patch: Partial<TestSession> = {}) {
   const promptCalls: { text: string; options: unknown }[] = [];
   const customMessageCalls: { message: { customType: string; content: string; display: boolean; details?: unknown }; options: unknown }[] = [];
   const bindExtensionCalls: unknown[] = [];
   const listeners: ((event: unknown) => void)[] = [];
-  const calls = { abort: 0, bindExtensions: bindExtensionCalls, clearQueue: 0, dispose: 0, prompt: promptCalls, sendCustomMessage: customMessageCalls };
+  const calls = { abort: 0, bindExtensions: bindExtensionCalls, clearQueue: 0, dispose: 0, prompt: promptCalls, reload: 0, sendCustomMessage: customMessageCalls };
   const session: TestSession = {
     sessionId,
     sessionFile: `/tmp/${sessionId}.jsonl`,
@@ -88,6 +96,10 @@ function fakeRuntime(sessionId = "session-1", patch: Partial<TestSession> = {}) 
     },
     getSessionStats: () => ({ sessionId, totalMessages: 0, userMessages: 0, assistantMessages: 0, toolCalls: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }),
     getContextUsage: () => undefined,
+    reload: () => {
+      calls.reload += 1;
+      return Promise.resolve();
+    },
     prompt: (text: string, options: unknown) => {
       calls.prompt.push({ text, options });
       return Promise.resolve();
@@ -115,6 +127,7 @@ function fakeRuntime(sessionId = "session-1", patch: Partial<TestSession> = {}) 
     setSessionName: (name: string) => { session.sessionName = name; },
     compact: () => Promise.resolve({ summary: "", tokensBefore: 0 }),
     getUserMessagesForForking: () => [],
+    agent: { streamFn: () => { throw new Error("streamFn should not be called in this test"); } },
     ...patch,
   };
   const runtime: PiSessionRuntime = {
@@ -156,6 +169,23 @@ function emptyArchiveStore(): NonNullable<PiSessionServiceDependencies["archiveS
 }
 
 describe("PiSessionService", () => {
+  it("exposes the session's agent.streamFn for one-off model calls", async () => {
+    const hub = new CapturingSessionEventHub();
+    const streamFn = vi.fn();
+    const fake = fakeRuntime("stream-session", { agent: { streamFn } });
+    const service = new PiSessionService(hub, {
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([]),
+      heartbeatIntervalMs: 60_000,
+    });
+
+    await service.start("/workspace");
+
+    expect(fake.session.agent.streamFn).toBe(streamFn);
+
+    await service.dispose();
+  });
+
   it("starts sessions through an injected runtime creator", async () => {
     const hub = new CapturingSessionEventHub();
     const fake = fakeRuntime();
@@ -183,6 +213,35 @@ describe("PiSessionService", () => {
     await service.dispose();
     expect(fake.calls.abort).toBe(1);
     expect(fake.calls.dispose).toBe(1);
+  });
+
+  it("reports persistence from actual session-file existence for fresh active sessions", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-web-persisted-"));
+    const sessionFile = join(dir, "new-session.jsonl");
+    const hub = new CapturingSessionEventHub();
+    const fake = fakeRuntime("new-session", { sessionFile });
+    let service: PiSessionService | undefined;
+    try {
+      service = new PiSessionService(hub, {
+        createAgentRuntime: runtimeCreator(fake.runtime),
+        sessionManager: sessionGateway([]),
+        heartbeatIntervalMs: 60_000,
+      });
+
+      const session = await service.start("/workspace");
+      const createdEvent = hub.globalEvents.find((event) => event.type === "session.created");
+
+      expect(session).toMatchObject({ id: "new-session", path: sessionFile, persisted: false });
+      expect(createdEvent).toMatchObject({ type: "session.created", session: { id: "new-session", persisted: false } });
+      await expect(service.status(sessionRef("new-session"))).resolves.toMatchObject({ sessionId: "new-session", persisted: false });
+
+      await writeFile(sessionFile, '{"type":"session","id":"new-session"}\n', "utf8");
+
+      await expect(service.status(sessionRef("new-session"))).resolves.toMatchObject({ sessionId: "new-session", persisted: true });
+    } finally {
+      await service?.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("opens legacy id-only lookups from the default session store gateway", async () => {
@@ -346,7 +405,7 @@ describe("PiSessionService", () => {
 
     const sessions = await service.list("/workspace");
     expect(sessions).toHaveLength(2);
-    expect(sessions[0]).toMatchObject({ id: "active" });
+    expect(sessions[0]).toMatchObject({ id: "active", persisted: true });
     expect(sessions[0]?.archived).toBeUndefined();
     expect(sessions[1]).toMatchObject({ id: "archived", archived: true, archivedAt: "2026-01-01T00:00:00.000Z" });
 
@@ -443,6 +502,315 @@ describe("PiSessionService", () => {
     await expect(service.deleteArchived("active")).rejects.toThrow("Archived session not found");
 
     expect(deletedSessionIds).toEqual(["archived"]);
+    await service.dispose();
+  });
+
+  it("bulk archives inactive sessions by cwd without opening runtimes", async () => {
+    const recordsByCwd = new Map([
+      ["/one", [sessionRecord("a", "/one"), sessionRecord("b", "/one")]],
+      ["/two", [sessionRecord("c", "/two")]],
+    ]);
+    const listCalls: string[] = [];
+    const open = vi.fn(() => { throw new Error("bulk archive should not open inactive runtimes"); });
+    const archiveMany = vi.fn((inputs: readonly { sessionId: string; cwd: string }[]) => Promise.resolve(inputs.map((input) => ({ sessionId: input.sessionId, cwd: input.cwd, archivedAt: "2026-01-03T00:00:00.000Z" }))));
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      archiveStore: {
+        list: () => Promise.resolve([]),
+        get: () => Promise.resolve(undefined),
+        archive: (input) => Promise.resolve({ sessionId: input.sessionId, cwd: input.cwd, archivedAt: "2026-01-03T00:00:00.000Z" }),
+        archiveMany,
+        restore: () => Promise.resolve(),
+        isArchived: () => Promise.resolve(false),
+      },
+      sessionManager: {
+        create: () => fakeSessionManager(),
+        list: (cwd) => {
+          listCalls.push(cwd);
+          return Promise.resolve(recordsByCwd.get(cwd) ?? []);
+        },
+        open,
+      },
+      heartbeatIntervalMs: 60_000,
+    });
+
+    const result = await service.archiveMany([{ id: "a", cwd: "/one" }, { id: "b", cwd: "/one" }, { id: "c", cwd: "/two" }]);
+
+    expect(result).toMatchObject({ archived: true, archivedSessionIds: ["a", "b", "c"], failures: [] });
+    expect(listCalls).toEqual(["/one", "/two"]);
+    expect(open).not.toHaveBeenCalled();
+    expect(archiveMany).toHaveBeenCalledTimes(1);
+    expect(archiveMany.mock.calls[0]?.[0].map((input) => input.sessionId)).toEqual(["a", "b", "c"]);
+    await service.dispose();
+  });
+
+  it("bulk archive reports per-session failures without aborting other archives", async () => {
+    const busy = fakeRuntime("busy", { isStreaming: true });
+    let createCalls = 0;
+    const archiveMany = vi.fn((inputs: readonly { sessionId: string; cwd: string }[]) => Promise.resolve(inputs.map((input) => ({ sessionId: input.sessionId, cwd: input.cwd, archivedAt: "2026-01-03T00:00:00.000Z" }))));
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      createAgentRuntime: () => {
+        createCalls += 1;
+        return Promise.resolve(busy.runtime);
+      },
+      archiveStore: {
+        list: () => Promise.resolve([]),
+        get: () => Promise.resolve(undefined),
+        archive: (input) => Promise.resolve({ sessionId: input.sessionId, cwd: input.cwd, archivedAt: "2026-01-03T00:00:00.000Z" }),
+        archiveMany,
+        restore: () => Promise.resolve(),
+        isArchived: () => Promise.resolve(false),
+      },
+      sessionManager: {
+        create: () => fakeSessionManager(),
+        list: () => Promise.resolve([sessionRecord("busy"), sessionRecord("ok")]),
+        open: () => fakeSessionManager(),
+      },
+      heartbeatIntervalMs: 60_000,
+    });
+
+    await service.status(sessionRef("busy"));
+    const result = await service.archiveMany([{ id: "busy", cwd: "/workspace" }, { id: "ok", cwd: "/workspace" }, { id: "missing", cwd: "/workspace" }]);
+
+    expect(createCalls).toBe(1);
+    expect(busy.calls.abort).toBe(0);
+    expect(archiveMany.mock.calls[0]?.[0].map((input) => input.sessionId)).toEqual(["ok"]);
+    expect(result.archivedSessionIds).toEqual(["ok"]);
+    expect(result.failures).toEqual([
+      { sessionId: "busy", error: "Stop current session activity before archiving" },
+      { sessionId: "missing", error: "Session not found" },
+    ]);
+    await service.dispose();
+  });
+
+  it("bulk deletes only archived sessions and skips busy active archived runtimes", async () => {
+    const busyRecord = { sessionId: "busy-archived", cwd: "/workspace", archivedAt: "2026-01-02T00:00:00.000Z", archivePath: "/archive/busy.jsonl" };
+    const idleRecord = { sessionId: "idle-archived", cwd: "/workspace", archivedAt: "2026-01-02T00:00:00.000Z", archivePath: "/archive/idle.jsonl" };
+    const busy = fakeRuntime("busy-archived", { isStreaming: true });
+    const deleteArchivedMany = vi.fn((sessionIds: readonly string[]) => Promise.resolve([...sessionIds]));
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      createAgentRuntime: runtimeCreator(busy.runtime),
+      archiveStore: {
+        list: () => Promise.resolve([busyRecord, idleRecord]),
+        get: (sessionId) => Promise.resolve(sessionId === "busy-archived" ? busyRecord : undefined),
+        archive: () => { throw new Error("archive should not be called for records that already have archive files"); },
+        restore: () => Promise.resolve(),
+        isArchived: () => Promise.resolve(false),
+        deleteArchived: () => Promise.resolve(),
+        deleteArchivedMany,
+      },
+      sessionManager: {
+        create: () => fakeSessionManager(),
+        list: () => Promise.resolve([sessionRecord("unarchived")]),
+        open: () => fakeSessionManager(),
+      },
+      heartbeatIntervalMs: 60_000,
+    });
+
+    await service.status(sessionRef("busy-archived"));
+    const result = await service.deleteArchivedMany([{ id: "busy-archived", cwd: "/workspace" }, { id: "idle-archived", cwd: "/workspace" }, { id: "unarchived", cwd: "/workspace" }]);
+
+    expect(busy.calls.abort).toBe(0);
+    expect(deleteArchivedMany).toHaveBeenCalledWith(["idle-archived"]);
+    expect(result.deletedSessionIds).toEqual(["idle-archived"]);
+    expect(result.failures).toEqual([
+      { sessionId: "busy-archived", error: "Stop current session activity before deleting archived session" },
+      { sessionId: "unarchived", error: "Archived session not found" },
+    ]);
+    await service.dispose();
+  });
+
+  it("bulk delete moves legacy archived records with one workspace scan before deleting", async () => {
+    const archiveMany = vi.fn((inputs: readonly { sessionId: string; cwd: string }[]) => Promise.resolve(inputs.map((input) => ({ sessionId: input.sessionId, cwd: input.cwd, archivedAt: "2026-01-03T00:00:00.000Z", archivePath: `/archive/${input.sessionId}.jsonl` }))));
+    const deleteArchivedMany = vi.fn((sessionIds: readonly string[]) => Promise.resolve([...sessionIds]));
+    const listCalls: string[] = [];
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      archiveStore: {
+        list: () => Promise.resolve([
+          { sessionId: "legacy-a", cwd: "/workspace", archivedAt: "2026-01-02T00:00:00.000Z" },
+          { sessionId: "legacy-b", cwd: "/workspace", archivedAt: "2026-01-02T00:00:00.000Z" },
+          { sessionId: "moved", cwd: "/workspace", archivedAt: "2026-01-02T00:00:00.000Z", archivePath: "/archive/moved.jsonl" },
+        ]),
+        get: () => Promise.resolve(undefined),
+        archive: (input) => Promise.resolve({ sessionId: input.sessionId, cwd: input.cwd, archivedAt: "2026-01-03T00:00:00.000Z" }),
+        archiveMany,
+        restore: () => Promise.resolve(),
+        isArchived: () => Promise.resolve(false),
+        deleteArchived: () => Promise.resolve(),
+        deleteArchivedMany,
+      },
+      sessionManager: {
+        create: () => fakeSessionManager(),
+        list: (cwd) => {
+          listCalls.push(cwd);
+          return Promise.resolve([sessionRecord("legacy-a"), sessionRecord("legacy-b"), sessionRecord("unarchived")]);
+        },
+        open: () => fakeSessionManager(),
+      },
+      heartbeatIntervalMs: 60_000,
+    });
+
+    const result = await service.deleteArchivedMany([{ id: "legacy-a", cwd: "/workspace" }, { id: "legacy-b", cwd: "/workspace" }, { id: "moved", cwd: "/workspace" }]);
+
+    expect(listCalls).toEqual(["/workspace"]);
+    expect(archiveMany.mock.calls[0]?.[0].map((input) => input.sessionId)).toEqual(["legacy-a", "legacy-b"]);
+    expect(deleteArchivedMany).toHaveBeenCalledWith(["legacy-a", "legacy-b", "moved"]);
+    expect(result.deletedSessionIds).toEqual(["legacy-a", "legacy-b", "moved"]);
+    expect(result.failures).toEqual([]);
+    await service.dispose();
+  });
+
+  it("previews session cleanup without mutating and executes a recomputed plan", async () => {
+    const archivedInputs: string[] = [];
+    const deletedSessionIds: string[] = [];
+    let listAllCalls = 0;
+    const archived = { sessionId: "archived-old", cwd: "/old-project", archivedAt: "2026-04-01T00:00:00.000Z", archivePath: "/archive/archived-old.jsonl" };
+    const otherArchived = { sessionId: "archived-other", cwd: "/other-project", archivedAt: "2026-04-01T00:00:00.000Z", archivePath: "/archive/archived-other.jsonl" };
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      now: () => new Date("2026-06-25T00:00:00.000Z"),
+      archiveStore: {
+        list: () => Promise.resolve([archived, otherArchived]),
+        get: () => Promise.resolve(undefined),
+        archive: () => Promise.reject(new Error("cleanup should use archiveMany")),
+        archiveMany: (inputs) => {
+          archivedInputs.push(...inputs.map((input) => input.sessionId));
+          return Promise.resolve(inputs.map((input) => ({ sessionId: input.sessionId, cwd: input.cwd, archivedAt: "2026-06-25T00:00:00.000Z" })));
+        },
+        restore: () => Promise.resolve(),
+        isArchived: () => Promise.resolve(false),
+        deleteArchived: () => Promise.reject(new Error("cleanup should use deleteArchivedMany")),
+        deleteArchivedMany: (sessionIds) => {
+          deletedSessionIds.push(...sessionIds);
+          return Promise.resolve([...sessionIds]);
+        },
+      },
+      sessionManager: {
+        create: () => fakeSessionManager(),
+        list: () => Promise.resolve([]),
+        listAll: () => {
+          listAllCalls += 1;
+          return Promise.resolve([
+            listAllCalls === 1 ? sessionRecord("preview-only", "/old-project") : sessionRecord("execute-only", "/old-project"),
+            listAllCalls === 1 ? sessionRecord("preview-other", "/other-project") : sessionRecord("execute-other", "/other-project"),
+          ]);
+        },
+        open: () => fakeSessionManager(),
+      },
+      heartbeatIntervalMs: 60_000,
+    });
+
+    const preview = await service.cleanupPreview({ thresholds: { archiveIdleDays: 30, deleteArchivedDays: 30 }, projectCwds: ["/old-project"] });
+    expect(preview.totals).toEqual({ archiveCount: 1, deleteCount: 1 });
+    expect(preview.projects).toEqual([{ cwd: "/old-project", archiveCount: 1, deleteCount: 1 }]);
+    expect(archivedInputs).toEqual([]);
+    expect(deletedSessionIds).toEqual([]);
+
+    const result = await service.cleanup({ thresholds: { archiveIdleDays: 30, deleteArchivedDays: 30 }, projectCwds: ["/old-project"] });
+    expect(result.archivedSessionIds).toEqual(["execute-only"]);
+    expect(result.deletedSessionIds).toEqual(["archived-old"]);
+    expect(archivedInputs).toEqual(["execute-only"]);
+    expect(deletedSessionIds).toEqual(["archived-old"]);
+
+    await service.dispose();
+  });
+
+  it("moves legacy cleanup delete records with one workspace scan before batch deleting", async () => {
+    const listCalls: string[] = [];
+    const archiveMany = vi.fn((inputs: readonly { sessionId: string; cwd: string }[]) => Promise.resolve(inputs.map((input) => ({ sessionId: input.sessionId, cwd: input.cwd, archivedAt: "2026-06-25T00:00:00.000Z", archivePath: `/archive/${input.sessionId}.jsonl` }))));
+    const deleteArchivedMany = vi.fn((sessionIds: readonly string[]) => Promise.resolve([...sessionIds]));
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      now: () => new Date("2026-06-25T00:00:00.000Z"),
+      archiveStore: {
+        list: () => Promise.resolve([
+          { sessionId: "legacy-a", cwd: "/old-project", archivedAt: "2026-04-01T00:00:00.000Z" },
+          { sessionId: "legacy-b", cwd: "/old-project", archivedAt: "2026-04-01T00:00:00.000Z" },
+        ]),
+        get: () => Promise.resolve(undefined),
+        archive: () => Promise.reject(new Error("cleanup should use archiveMany")),
+        archiveMany,
+        restore: () => Promise.resolve(),
+        isArchived: () => Promise.resolve(false),
+        deleteArchived: () => Promise.reject(new Error("cleanup should use deleteArchivedMany")),
+        deleteArchivedMany,
+      },
+      sessionManager: {
+        create: () => fakeSessionManager(),
+        list: (cwd) => {
+          listCalls.push(cwd);
+          return Promise.resolve([sessionRecord("legacy-a", cwd), sessionRecord("legacy-b", cwd)]);
+        },
+        listAll: () => Promise.resolve([]),
+        open: () => fakeSessionManager(),
+      },
+      heartbeatIntervalMs: 60_000,
+    });
+
+    const result = await service.cleanup({ thresholds: { deleteArchivedDays: 30 }, projectCwds: ["/old-project"] });
+
+    expect(listCalls).toEqual(["/old-project"]);
+    expect(archiveMany).toHaveBeenCalledTimes(1);
+    expect(archiveMany.mock.calls[0]?.[0].map((input) => input.sessionId)).toEqual(["legacy-a", "legacy-b"]);
+    expect(deleteArchivedMany).toHaveBeenCalledWith(["legacy-a", "legacy-b"]);
+    expect(result.deletedSessionIds).toEqual(["legacy-a", "legacy-b"]);
+
+    await service.dispose();
+  });
+
+  it("skips busy active sessions during cleanup execution", async () => {
+    const fake = fakeRuntime("busy-open", { isStreaming: true, sessionManager: fakeSessionManager("/old-project"), sessionFile: "/sessions/busy-open.jsonl" });
+    const archivedInputs: string[] = [];
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      now: () => new Date("2026-06-25T00:00:00.000Z"),
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      archiveStore: {
+        list: () => Promise.resolve([]),
+        get: () => Promise.resolve(undefined),
+        archive: (input) => {
+          archivedInputs.push(input.sessionId);
+          return Promise.resolve({ sessionId: input.sessionId, cwd: input.cwd, archivedAt: "2026-06-25T00:00:00.000Z" });
+        },
+        restore: () => Promise.resolve(),
+        isArchived: () => Promise.resolve(false),
+      },
+      sessionManager: {
+        create: () => fakeSessionManager("/old-project"),
+        list: () => Promise.resolve([sessionRecord("busy-open", "/old-project")]),
+        listAll: () => Promise.resolve([sessionRecord("busy-open", "/old-project")]),
+        open: () => fakeSessionManager("/old-project"),
+      },
+      heartbeatIntervalMs: 60_000,
+    });
+
+    await service.status("busy-open");
+    const result = await service.cleanup({ thresholds: { archiveIdleDays: 1 } });
+
+    expect(result.archivedSessionIds).toEqual([]);
+    expect(result.skippedBusySessionIds).toEqual(["busy-open"]);
+    expect(archivedInputs).toEqual([]);
+    expect(fake.calls.abort).toBe(0);
+
+    await service.dispose();
+  });
+
+  it("runs /reload by refreshing the active runtime resources in place", async () => {
+    const hub = new CapturingSessionEventHub();
+    const fake = fakeRuntime("runtime-reload-session");
+    const service = new PiSessionService(hub, {
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([sessionRecord("runtime-reload-session")]),
+      heartbeatIntervalMs: 60_000,
+    });
+
+    await expect(service.runCommand(sessionRef("runtime-reload-session"), "/reload")).resolves.toEqual({
+      type: "done",
+      message: "Session runtime resources reloaded. Extensions, skills, prompt templates, themes, and context/system prompt files are refreshed for this session. Reload the browser page separately for PI WEB browser plugin changes.",
+    });
+
+    expect(fake.calls.reload).toBe(1);
+    expect(fake.calls.abort).toBe(0);
+    expect(fake.calls.dispose).toBe(0);
+    expect(hub.globalEvents.some((event) => event.type === "activity.update" && event.activity.sessionId === "runtime-reload-session" && event.activity.label === "resources reloaded")).toBe(true);
+    expect(hub.globalEvents.some((event) => event.type === "status.update" && event.status.sessionId === "runtime-reload-session")).toBe(true);
+
     await service.dispose();
   });
 
@@ -598,6 +966,42 @@ describe("PiSessionService", () => {
     await expect(service.prompt("prompt-session", undefined)).rejects.toThrow("Prompt text is required");
 
     expect(fake.calls.prompt).toEqual([]);
+    await service.dispose();
+  });
+
+  it("generates a session name for the first prompt via the session's agent.streamFn", async () => {
+    const model = testModel();
+    const streamCalls: unknown[] = [];
+    const streamFn: StreamFn = (streamModel, context, options) => {
+      streamCalls.push({ streamModel, context, options });
+      const stream = createAssistantMessageEventStream();
+      const message: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "Fix login bug" }],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: model.id,
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      };
+      stream.push({ type: "done", reason: "stop", message });
+      stream.end(message);
+      return stream;
+    };
+    const hub = new CapturingSessionEventHub();
+    const fake = fakeRuntime("name-session", { model, agent: { streamFn } });
+    const service = new PiSessionService(hub, {
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([sessionRecord("name-session")]),
+      heartbeatIntervalMs: 60_000,
+    });
+
+    await service.prompt(sessionRef("name-session"), "Please fix the login bug");
+    await vi.waitFor(() => { expect(fake.session.sessionName).toBe("Fix login bug"); });
+
+    expect(streamCalls).toHaveLength(1);
+    expect(hub.sessionEvents.some(({ event }) => event.type === "session.name" && event.name === "Fix login bug")).toBe(true);
     await service.dispose();
   });
 
@@ -820,6 +1224,28 @@ describe("PiSessionService", () => {
       await service.dispose();
     });
 
+    it("uses the dispatching session's model as the spawned session's initial model", async () => {
+      const fake = fakeRuntime("spawned-1", { sessionFile: "/tmp/spawned-1.jsonl" });
+      const model = testModel();
+      let initialModel: PiAgentSession["model"];
+      const createAgentRuntime: RuntimeCreator = async (_createRuntime, options) => {
+        await Promise.resolve();
+        initialModel = options.initialModel;
+        return fake.runtime;
+      };
+      const service = new PiSessionService(new CapturingSessionEventHub(), {
+        createAgentRuntime,
+        sessionManager: sessionGateway([]),
+        spawnTargets: { resolveSpawnTarget: () => Promise.resolve({ allowed: true, cwd: "/workspace-feature" }) },
+        heartbeatIntervalMs: 60_000,
+      });
+
+      await service.spawnSession({ spawningCwd: "/workspace", prompt: "continue", cwd: "/workspace-feature", model });
+
+      expect(initialModel).toBe(model);
+      await service.dispose();
+    });
+
     it("rejects an out-of-project target without starting a session", async () => {
       const { fake, service } = spawnService({ allowed: false, reason: "out-of-project", allowedCwds: ["/workspace"] });
 
@@ -898,6 +1324,35 @@ describe("PiSessionService", () => {
         { sessionId: "child-1", cwd: "/workspace-feature", status: "idle" },
       ]);
       void parent;
+      await service.dispose();
+    });
+
+    it("uses the parent session's model as the tracked child's initial model", async () => {
+      const parent = fakeRuntime("parent-1", { sessionFile: "/tmp/parent-1.jsonl" });
+      const child = fakeRuntime("child-1", { sessionFile: "/tmp/child-1.jsonl", sessionManager: fakeSessionManager("/workspace-feature") });
+      const model = testModel();
+      const initialModels: PiAgentSession["model"][] = [];
+      const runtimes = [parent.runtime, child.runtime];
+      let index = 0;
+      const createAgentRuntime: RuntimeCreator = async (_createRuntime, options) => {
+        await Promise.resolve();
+        initialModels.push(options.initialModel);
+        const runtime = runtimes[index] ?? child.runtime;
+        index += 1;
+        return runtime;
+      };
+      const service = new PiSessionService(new CapturingSessionEventHub(), {
+        createAgentRuntime,
+        sessionManager: sessionGateway([]),
+        archiveStore: emptyArchiveStore(),
+        spawnTargets: { resolveSpawnTarget: () => Promise.resolve({ allowed: true, cwd: "/workspace-feature" }) },
+        heartbeatIntervalMs: 60_000,
+      });
+
+      await service.start("/workspace");
+      await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice", cwd: "/workspace-feature", model });
+
+      expect(initialModels).toEqual([undefined, model]);
       await service.dispose();
     });
 

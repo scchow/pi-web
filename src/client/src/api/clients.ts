@@ -1,4 +1,4 @@
-import type { DeleteWorkspaceFileResponse, FileSuggestion, MoveWorkspaceFileOptions, PiWebConfigValues, PromptAttachment, RunTerminalCommandInput, SessionRef, TerminalCommandRun, TerminalCommandRunFilter, WriteWorkspaceFileOptions } from "../../../shared/apiTypes";
+import type { DeleteWorkspaceFileResponse, FileSuggestion, MoveWorkspaceFileOptions, PiPackageInstallRequest, PiPackageRemoveRequest, PiPackageScope, PiPackageUpdateRequest, PiWebConfigValues, PromptAttachment, RunTerminalCommandInput, SessionBulkMutationRef, SessionCleanupRequest, SessionRef, TerminalCommandRun, TerminalCommandRunFilter, WriteWorkspaceFileOptions } from "../../../shared/apiTypes";
 import { request } from "./http";
 import {
   arrayOf,
@@ -24,6 +24,8 @@ import {
   parseModelSelectionResponse,
   parseMoveWorkspaceFileResponse,
   parseOAuthFlowState,
+  parsePiPackageMutationResponse,
+  parsePiPackagesResponse,
   parsePiWebConfigResponse,
   parsePiWebPluginsResponse,
   parsePiWebRuntimeResponse,
@@ -32,6 +34,10 @@ import {
   parseReloaded,
   parseRestored,
   parseSavedAttachments,
+  parseSessionBulkArchiveResponse,
+  parseSessionBulkDeleteArchivedResponse,
+  parseSessionCleanupExecuteResponse,
+  parseSessionCleanupPreviewResponse,
   parseSessionInfo,
   parseSessionStatus,
   parseSlashCommand,
@@ -83,6 +89,16 @@ function sessionBody(session: SessionLookup, fields: Record<string, unknown> = {
   return JSON.stringify(cwd === undefined || cwd === "" ? fields : { cwd, ...fields });
 }
 
+function sessionBulkMutationBody(sessions: readonly SessionLookup[]): string {
+  return JSON.stringify({ sessions: sessions.map(sessionBulkMutationRef) });
+}
+
+function sessionBulkMutationRef(session: SessionLookup): SessionBulkMutationRef {
+  const id = sessionId(session);
+  const cwd = sessionCwd(session);
+  return cwd === undefined || cwd === "" ? { id } : { id, cwd };
+}
+
 export const piWebApi = {
   piWebStatus: (machineId = "local") => request(machineId === "local" ? "/api/pi-web/status" : `${machinePrefix(machineId)}/pi-web/status`, parsePiWebStatusResponse),
   piWebRuntime: () => request("/api/pi-web/runtime", parsePiWebRuntimeResponse),
@@ -96,13 +112,42 @@ export const machinesApi = {
   runtime: (machineId: string) => request(`/api/machines/${encodeURIComponent(machineId)}/runtime`, parseMachineRuntime),
 };
 
+function configUrl(machineId?: string): string {
+  return machineId === undefined ? "/api/config" : `${machinePrefix(machineId)}/config`;
+}
+
+function pluginsUrl(machineId?: string): string {
+  return machineId === undefined ? "/api/plugins" : `${machinePrefix(machineId)}/plugins`;
+}
+
 export const configApi = {
-  config: () => request("/api/config", parsePiWebConfigResponse),
-  saveConfig: (config: PiWebConfigValues) => request("/api/config", parsePiWebConfigResponse, { method: "PUT", body: JSON.stringify({ config }) }),
+  config: (machineId?: string) => request(configUrl(machineId), parsePiWebConfigResponse),
+  saveConfig: (config: PiWebConfigValues, machineId?: string) => request(configUrl(machineId), parsePiWebConfigResponse, { method: "PUT", body: JSON.stringify({ config }) }),
 };
 
 export const pluginsApi = {
-  plugins: () => request("/api/plugins", parsePiWebPluginsResponse),
+  plugins: (machineId?: string) => request(pluginsUrl(machineId), parsePiWebPluginsResponse),
+};
+
+function piPackageUrl(endpoint = "", machineId?: string): string {
+  const baseUrl = machineId === undefined ? "/api/pi-packages" : `${machinePrefix(machineId)}/pi-packages`;
+  return endpoint === "" ? baseUrl : `${baseUrl}/${endpoint}`;
+}
+
+export const piPackagesApi = {
+  packages: (machineId?: string) => request(piPackageUrl("", machineId), parsePiPackagesResponse),
+  install: (source: string, machineId?: string) => {
+    const body: PiPackageInstallRequest = { source };
+    return request(piPackageUrl("install", machineId), parsePiPackageMutationResponse, { method: "POST", body: JSON.stringify(body) });
+  },
+  remove: (source: string, scope?: PiPackageScope, machineId?: string) => {
+    const body: PiPackageRemoveRequest = scope === undefined ? { source } : { source, scope };
+    return request(piPackageUrl("remove", machineId), parsePiPackageMutationResponse, { method: "POST", body: JSON.stringify(body) });
+  },
+  update: (source?: string, machineId?: string) => {
+    const body: PiPackageUpdateRequest | undefined = source === undefined ? undefined : { source };
+    return request(piPackageUrl("update", machineId), parsePiPackageMutationResponse, { method: "POST", ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  },
 };
 
 export const activityApi = {
@@ -152,6 +197,10 @@ export const workspacesApi = {
 export const sessionsApi = {
   sessions: (cwd: string, machineId = "local") => request(`${machinePrefix(machineId)}/sessions?cwd=${encodeURIComponent(cwd)}`, arrayOf(parseSessionInfo)),
   startSession: (cwd: string, machineId = "local") => request(`${machinePrefix(machineId)}/sessions`, parseSessionInfo, { method: "POST", body: JSON.stringify({ cwd }) }),
+  cleanupPreview: (input: SessionCleanupRequest, machineId = "local") => request(`${machinePrefix(machineId)}/sessions/cleanup/preview`, parseSessionCleanupPreviewResponse, { method: "POST", body: JSON.stringify(input) }),
+  cleanup: (input: SessionCleanupRequest, machineId = "local") => request(`${machinePrefix(machineId)}/sessions/cleanup`, parseSessionCleanupExecuteResponse, { method: "POST", body: JSON.stringify(input) }),
+  archiveMany: (sessions: readonly SessionLookup[], machineId = "local") => request(`${machinePrefix(machineId)}/sessions/bulk/archive`, parseSessionBulkArchiveResponse, { method: "POST", body: sessionBulkMutationBody(sessions) }),
+  deleteArchivedMany: (sessions: readonly SessionLookup[], machineId = "local") => request(`${machinePrefix(machineId)}/sessions/bulk/delete-archived`, parseSessionBulkDeleteArchivedResponse, { method: "POST", body: sessionBulkMutationBody(sessions) }),
   messages: (session: SessionLookup, options?: { limit?: number; before?: number }, machineId = "local") => request(messageUrl(session, options, machineId), parseMessagePage),
   status: (session: SessionLookup, machineId = "local") => request(sessionQueryUrl(session, "status", machineId), parseSessionStatus),
   models: (session: SessionLookup, machineId = "local") => request(sessionQueryUrl(session, "models", machineId), parseModelSelectionResponse),
@@ -267,6 +316,7 @@ export const api = {
   ...machinesApi,
   ...configApi,
   ...pluginsApi,
+  ...piPackagesApi,
   ...activityApi,
   ...projectsApi,
   ...workspacesApi,

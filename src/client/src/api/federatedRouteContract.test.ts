@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Workspace } from "../../../shared/apiTypes";
 import { FEDERATED_HTTP_ROUTES, FEDERATED_WEBSOCKET_ROUTES, type FederatedHttpRouteSpec } from "../../../shared/federatedRoutes";
-import { activityApi, filesApi, gitApi, piWebApi, projectsApi, sessionsApi, terminalsApi, workspacesApi } from "./clients";
+import { activityApi, configApi, filesApi, gitApi, piPackagesApi, piWebApi, pluginsApi, projectsApi, sessionsApi, terminalsApi, workspacesApi } from "./clients";
 import { globalSessionEvents, realtimeEvents, sessionEvents, terminalSocket } from "./sockets";
 import { workspaceImagePreviewUrl } from "./urls";
 
@@ -28,6 +28,13 @@ describe("federated route contract", () => {
 
     await Promise.all([
       ignoreParseFailure(piWebApi.piWebStatus(machineId)),
+      ignoreParseFailure(configApi.config(machineId)),
+      ignoreParseFailure(configApi.saveConfig({ spawnSessions: true }, machineId)),
+      ignoreParseFailure(pluginsApi.plugins(machineId)),
+      ignoreParseFailure(piPackagesApi.packages(machineId)),
+      ignoreParseFailure(piPackagesApi.install("npm:@acme/tools", machineId)),
+      ignoreParseFailure(piPackagesApi.remove("npm:@acme/tools", "user", machineId)),
+      ignoreParseFailure(piPackagesApi.update("npm:@acme/tools", machineId)),
       ignoreParseFailure(activityApi.workspaceActivity(machineId)),
       ignoreParseFailure(projectsApi.projects(machineId)),
       ignoreParseFailure(projectsApi.addProject("/repo", "Repo", false, machineId)),
@@ -46,6 +53,10 @@ describe("federated route contract", () => {
       ignoreParseFailure(gitApi.gitDiff("p 1", "w 1", { path: "README.md", staged: true }, machineId)),
       ignoreParseFailure(sessionsApi.sessions("/repo", machineId)),
       ignoreParseFailure(sessionsApi.startSession("/repo", machineId)),
+      ignoreParseFailure(sessionsApi.cleanupPreview({ archiveIdleDays: 14 }, machineId)),
+      ignoreParseFailure(sessionsApi.cleanup({ archiveIdleDays: 14, deleteArchivedDays: 30, projectCwds: ["/repo"] }, machineId)),
+      ignoreParseFailure(sessionsApi.archiveMany([session], machineId)),
+      ignoreParseFailure(sessionsApi.deleteArchivedMany([session], machineId)),
       ignoreParseFailure(sessionsApi.messages(session, { limit: 20, before: 10 }, machineId)),
       ignoreParseFailure(sessionsApi.status(session, machineId)),
       ignoreParseFailure(sessionsApi.models(session, machineId)),

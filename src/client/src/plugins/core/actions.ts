@@ -1,8 +1,8 @@
 import { isSessionActive } from "../../../../shared/activity";
-import { PI_WEB_CAPABILITIES, supportsPiWebCapability } from "../../../../shared/capabilities";
+import { PI_WEB_CAPABILITIES, supportsPiWebCapability, type PiWebCapability } from "../../../../shared/capabilities";
 import type { AppState } from "../../appState";
-import { isCachedNewSessionInfo } from "../../cachedNewSessions";
 import { selectedMachineId } from "../../controllers/types";
+import { isArchivableSessionInfo, isTransientNewSessionInfo } from "../../sessionPersistence";
 import { isWorkspaceDeletionPending } from "../../workspaceDeletion";
 import type { PluginAction } from "../types";
 
@@ -177,18 +177,19 @@ export function createCoreActions(): PluginAction[] {
     },
     {
       id: "session.reload",
-      title: "Reload Session",
-      description: "Re-read the selected session from disk to pick up entries written by another process",
+      title: "Reload Session from Disk",
+      description: "Close and re-open the selected session from its session file. Use /reload in the prompt for Pi runtime resources.",
       group: "Session",
       enabled: hasReloadableSession,
+      disabledReason: reloadSessionDisabledReason,
       run: (context) => context.reloadSession(),
     },
     {
       id: "session.delete",
       title: "Delete New Session",
-      description: "Delete the selected browser-cached new session",
+      description: "Delete the selected transient new session",
       group: "Session",
-      enabled: hasCachedNewSession,
+      enabled: hasTransientNewSession,
       run: (context) => context.deleteCachedNewSession(),
     },
     {
@@ -216,18 +217,27 @@ function hasDeletableWorkspace(context: { state: AppState }): boolean {
 }
 
 function hasArchivableSession(context: { state: AppState }): boolean {
-  const session = context.state.selectedSession;
-  return session !== undefined && session.archived !== true && !isCachedNewSessionInfo(session);
+  return isArchivableSessionInfo(context.state.selectedSession, context.state.status);
 }
 
-function hasCachedNewSession(context: { state: AppState }): boolean {
-  return isCachedNewSessionInfo(context.state.selectedSession);
+function hasTransientNewSession(context: { state: AppState }): boolean {
+  return isTransientNewSessionInfo(context.state.selectedSession, context.state.status);
 }
 
 function hasReloadableSession(context: { state: AppState }): boolean {
-  const session = context.state.selectedSession;
-  if (session === undefined || session.archived === true || isCachedNewSessionInfo(session)) return false;
-  const runtime = context.state.machineRuntimes[selectedMachineId(context.state)];
-  if (runtime?.ok !== true || !supportsPiWebCapability(runtime, PI_WEB_CAPABILITIES.sessionsReload)) return false;
+  if (!isArchivableSessionInfo(context.state.selectedSession, context.state.status)) return false;
+  if (reloadSessionDisabledReason(context) !== undefined) return false;
   return !isSessionActive(context.state.status, context.state.activity);
+}
+
+function reloadSessionDisabledReason(context: { state: AppState }): string | undefined {
+  if (!isArchivableSessionInfo(context.state.selectedSession, context.state.status)) return undefined;
+  if (isSessionActive(context.state.status, context.state.activity)) return undefined;
+  return missingCapabilityReason(context.state, PI_WEB_CAPABILITIES.sessionsReload, "reload sessions from disk");
+}
+
+function missingCapabilityReason(state: AppState, capability: PiWebCapability, action: string): string | undefined {
+  const runtime = state.machineRuntimes[selectedMachineId(state)];
+  if (runtime?.ok === true && supportsPiWebCapability(runtime, capability)) return undefined;
+  return `Update and restart Pi-Web on ${state.selectedMachine?.name ?? "this machine"} to ${action}.`;
 }
