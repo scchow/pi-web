@@ -104,7 +104,7 @@ function renderUpdatesPanel(html: HtmlTemplateTag, terminal: WorkspacePanelTermi
         .updates-command > span { grid-column: 1 / -1; }
       }
     </style>
-    <section class="toolbar"><strong>Updates</strong><span class="stale">beta</span>${messages.length > 0 ? html`<span class="stale">${String(messages.length)}</span>` : null}</section>
+    <section class="toolbar"><strong>Updates</strong>${messages.length > 0 ? html`<span class="stale">${String(messages.length)}</span>` : null}</section>
     <section class="viewer updates-status">
       <section>
         ${messages.length === 0 ? html`<p class="muted">No PI WEB update or restart messages.</p>` : messages.map((message) => html`
@@ -160,7 +160,7 @@ const plugin: PiWebPlugin = {
           visible: (context) => shouldShowUpdatesPanel(context.state),
           badge: (context) => {
             const count = messageCount(context.state);
-            return html`beta${count > 0 ? html` · ${String(count)}` : null}`;
+            return count > 0 ? count : undefined;
           },
           render: (context) => renderUpdatesPanel(html, context.terminal, context.state),
         },
