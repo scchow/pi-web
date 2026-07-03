@@ -169,23 +169,6 @@ function emptyArchiveStore(): NonNullable<PiSessionServiceDependencies["archiveS
 }
 
 describe("PiSessionService", () => {
-  it("exposes the session's agent.streamFn for one-off model calls", async () => {
-    const hub = new CapturingSessionEventHub();
-    const streamFn = vi.fn();
-    const fake = fakeRuntime("stream-session", { agent: { streamFn } });
-    const service = new PiSessionService(hub, {
-      createAgentRuntime: runtimeCreator(fake.runtime),
-      sessionManager: sessionGateway([]),
-      heartbeatIntervalMs: 60_000,
-    });
-
-    await service.start("/workspace");
-
-    expect(fake.session.agent.streamFn).toBe(streamFn);
-
-    await service.dispose();
-  });
-
   it("starts sessions through an injected runtime creator", async () => {
     const hub = new CapturingSessionEventHub();
     const fake = fakeRuntime();
@@ -957,14 +940,21 @@ describe("PiSessionService", () => {
 
   it("rejects malformed prompt text before opening the runtime", async () => {
     const fake = fakeRuntime("prompt-session");
+    let createCalls = 0;
+    const createAgentRuntime: RuntimeCreator = async () => {
+      createCalls += 1;
+      await Promise.resolve();
+      return fake.runtime;
+    };
     const service = new PiSessionService(new CapturingSessionEventHub(), {
-      createAgentRuntime: runtimeCreator(fake.runtime),
+      createAgentRuntime,
       sessionManager: sessionGateway([sessionRecord("prompt-session")]),
       heartbeatIntervalMs: 60_000,
     });
 
     await expect(service.prompt("prompt-session", undefined)).rejects.toThrow("Prompt text is required");
 
+    expect(createCalls).toBe(0);
     expect(fake.calls.prompt).toEqual([]);
     await service.dispose();
   });
@@ -1313,7 +1303,7 @@ describe("PiSessionService", () => {
     }
 
     it("records the parent, delivers the prompt, and lists the tracked child", async () => {
-      const { parent, child, service } = subsessionService({ allowed: true, cwd: "/workspace-feature" });
+      const { child, service } = subsessionService({ allowed: true, cwd: "/workspace-feature" });
       await service.start("/workspace"); // bring the parent online so it can be notified
 
       const result = await service.spawnSubsession({ spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "do the slice", cwd: "/workspace-feature" });
@@ -1323,7 +1313,6 @@ describe("PiSessionService", () => {
       await expect(service.listSubsessions("parent-1")).resolves.toEqual([
         { sessionId: "child-1", cwd: "/workspace-feature", status: "idle" },
       ]);
-      void parent;
       await service.dispose();
     });
 

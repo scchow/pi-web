@@ -8,7 +8,7 @@ describe("selectable row activation", () => {
     expect(action).toHaveBeenCalledOnce();
   });
 
-  it("preserves contributed links and other interactive elements", () => {
+  it("preserves contributed links inside rows", () => {
     const action = vi.fn();
     activateSelectableRow(eventWithPath(matchTarget((selector: string) => selector.includes("a[href]"))), action);
     expect(action).not.toHaveBeenCalled();
@@ -57,6 +57,8 @@ describe("selectable row activation", () => {
     expect(handleSelectableRowKeyboard(event, { activate: vi.fn(), cancel })).toBe(true);
 
     expect(cancel).toHaveBeenCalledOnce();
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(event.stopPropagation).toHaveBeenCalledOnce();
   });
 });
 

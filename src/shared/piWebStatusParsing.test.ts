@@ -3,7 +3,7 @@ import { PI_WEB_CAPABILITIES } from "./capabilities";
 import { parsePiWebComponentStatus, parsePiWebInstallationInfo, parsePiWebRuntimeResponse, parsePiWebVersionResponse } from "./piWebStatusParsing";
 
 describe("PI WEB status parsing", () => {
-  it("parses known runtime capabilities and ignores unknown string capabilities", () => {
+  it("parses known top-level and component capabilities while ignoring unknown strings", () => {
     expect(parsePiWebRuntimeResponse({
       packageName: "@jmfederico/pi-web",
       generatedAt: "now",
@@ -21,7 +21,7 @@ describe("PI WEB status parsing", () => {
     });
   });
 
-  it("rejects malformed capability arrays", () => {
+  it("rejects runtime responses with malformed component capability arrays", () => {
     expect(parsePiWebRuntimeResponse({
       packageName: "@jmfederico/pi-web",
       generatedAt: "now",

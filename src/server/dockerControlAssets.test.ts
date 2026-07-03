@@ -536,7 +536,7 @@ async function withUnixSocket<T>(socketPath: string, callback: () => Promise<T>)
 function cleanProcessEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
-    if (key === "COMPOSE_PROJECT_NAME" || key === "DOCKER_GID" || key === "HOSTEXEC_IMAGE" || key.startsWith("PI_WEB_")) {
+    if (key === "COMPOSE_PROJECT_NAME" || key === "DOCKER_GID" || key === "HOSTEXEC_IMAGE" || key === "XDG_DATA_HOME" || key.startsWith("PI_WEB_")) {
       Reflect.deleteProperty(env, key);
     }
   }

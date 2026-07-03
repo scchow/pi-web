@@ -64,7 +64,7 @@ describe("PluginRegistry", () => {
     expect(registry.getWorkspacePanels().map((panel) => panel.id)).toEqual(["core:workspace.files", "core:workspace.git", "core:workspace.terminal"]);
   });
 
-  it("provides html and svg helpers to plugin activation", () => {
+  it("provides html and svg helpers to plugin activation and callbacks", () => {
     const registry = new PluginRegistry();
     registry.register({
       id: "example",
@@ -86,7 +86,10 @@ describe("PluginRegistry", () => {
       },
     });
 
-    expect(registry.getWorkspacePanels()[0]?.icon).toBeDefined();
+    const panel = registry.getWorkspacePanels()[0];
+
+    expect(panel?.icon).toBeDefined();
+    expect(panel?.render(createWorkspacePanelContext("local"))).toBeDefined();
   });
 
   it("exposes the prompt helper to workspace panel callbacks", () => {

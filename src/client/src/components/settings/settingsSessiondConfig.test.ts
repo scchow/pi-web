@@ -5,9 +5,7 @@ import { mergeSelectedMachineSessiondConfig, spawnSessionsConfigPatch, subsessio
 describe("session daemon settings config helpers", () => {
   it("builds daemon-only save patches for the sessiond toggles", () => {
     expect(spawnSessionsConfigPatch(false)).toEqual({ spawnSessions: false });
-    expect(Object.keys(spawnSessionsConfigPatch(false))).toEqual(["spawnSessions"]);
     expect(subsessionsConfigPatch(true)).toEqual({ subsessions: true });
-    expect(Object.keys(subsessionsConfigPatch(true))).toEqual(["subsessions"]);
   });
 
   it("merges local selected-machine daemon config into gateway config without dropping gateway-only values", () => {

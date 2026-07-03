@@ -123,25 +123,6 @@ describe("settings-general-panel save payloads", () => {
     expect(getPanelProperty(panel, "machineLocalError")).toBe("");
   });
 
-  it("clears upload defaults with a selected-machine-safe patch", async () => {
-    const panel = new SettingsGeneralPanel();
-    const onSaveMachineConfig = vi.fn();
-    panel.onSaveMachineConfig = onSaveMachineConfig;
-    setPanelProperty(panel, "machineDraft", {
-      allowedPathsText: "",
-      uploadDefaultFolder: "",
-    } satisfies MachineAccessConfigDraft);
-
-    await callPanelPromise(panel, "saveMachineAccessConfig", new Event("submit", { cancelable: true }));
-
-    expect(onSaveMachineConfig.mock.calls).toEqual([[
-      {
-        pathAccess: { allowedPaths: [] },
-        uploads: {},
-      },
-    ]]);
-  });
-
   it("keeps invalid upload folders local and does not save selected-machine config", async () => {
     const panel = new SettingsGeneralPanel();
     const onSaveMachineConfig = vi.fn();

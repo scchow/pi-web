@@ -85,9 +85,11 @@ describe("registerPiPackageRoutes", () => {
     expect(missingSource.statusCode).toBe(400);
     expect(missingSource.json()).toEqual({ error: "Pi package source must be a non-empty string" });
     expect(blankSource.statusCode).toBe(400);
+    expect(blankSource.json()).toEqual({ error: "Pi package source must be a non-empty string" });
     expect(invalidScope.statusCode).toBe(400);
     expect(invalidScope.json()).toEqual({ error: "Pi package scope must be \"user\" or \"project\"" });
     expect(invalidUpdate.statusCode).toBe(400);
+    expect(invalidUpdate.json()).toEqual({ error: "Pi package source must be a non-empty string" });
     expect(serviceMocks.install).not.toHaveBeenCalled();
     expect(serviceMocks.remove).not.toHaveBeenCalled();
     expect(serviceMocks.update).not.toHaveBeenCalled();

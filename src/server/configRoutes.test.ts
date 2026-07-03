@@ -35,15 +35,32 @@ describe("config routes", () => {
   });
 
   it("updates config through the service", async () => {
+    const requestedConfig: PiWebConfigValues = {
+      host: "0.0.0.0",
+      port: 9000,
+      allowedHosts: true,
+      spawnSessions: true,
+      subsessions: true,
+      shortcuts: { "core:view.chat": "mod+1", "core:session.stop": null },
+      plugins: { info: { enabled: false, settings: { note: "hidden" } } },
+      pathAccess: { allowedPaths: ["/tmp"] },
+      uploads: { defaultFolder: "uploads\\manual" },
+      maxUploadBytes: 1234,
+    };
+    const expectedConfig: PiWebConfigValues = {
+      ...requestedConfig,
+      uploads: { defaultFolder: "uploads/manual" },
+    };
+
     const response = await app.inject({
       method: "PUT",
       url: "/api/config",
-      payload: { config: { host: "0.0.0.0", port: 9000, allowedHosts: true, spawnSessions: true, subsessions: true, shortcuts: { "core:view.chat": "mod+1", "core:session.stop": null }, plugins: { info: { enabled: false, settings: { note: "hidden" } } }, pathAccess: { allowedPaths: ["/tmp"] }, uploads: { defaultFolder: "uploads\\manual" }, maxUploadBytes: 1234 } },
+      payload: { config: requestedConfig },
     });
 
     expect(response.statusCode).toBe(200);
-    expect(savedConfig).toEqual({ host: "0.0.0.0", port: 9000, allowedHosts: true, spawnSessions: true, subsessions: true, shortcuts: { "core:view.chat": "mod+1", "core:session.stop": null }, plugins: { info: { enabled: false, settings: { note: "hidden" } } }, pathAccess: { allowedPaths: ["/tmp"] }, uploads: { defaultFolder: "uploads/manual" }, maxUploadBytes: 1234 });
-    expect(response.json<PiWebConfigResponse>().config).toEqual(savedConfig);
+    expect(savedConfig).toEqual(expectedConfig);
+    expect(response.json<PiWebConfigResponse>().config).toEqual(expectedConfig);
   });
 
   it("rejects invalid config payloads before writing", async () => {
@@ -109,11 +126,16 @@ describe("config routes", () => {
 
   it("merges local selected-machine config updates without dropping gateway-only keys", async () => {
     savedConfig = fullConfig();
+    const selectedMachinePatch: PiWebConfigValues = {
+      plugins: { info: { enabled: false } },
+      uploads: { defaultFolder: "uploads\\manual" },
+      spawnSessions: true,
+    };
 
     const response = await app.inject({
       method: "PUT",
       url: "/api/machines/local/config",
-      payload: { config: { plugins: { info: { enabled: false } }, uploads: { defaultFolder: "uploads\\manual" }, spawnSessions: true } },
+      payload: { config: selectedMachinePatch },
     });
 
     const expectedConfig: PiWebConfigValues = {

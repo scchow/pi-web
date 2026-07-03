@@ -28,7 +28,7 @@ describe("settings-panel-frame", () => {
     expect(rendered.indexOf('class="notice-stack"')).toBeLessThan(rendered.indexOf('class="content"'));
   });
 
-  it("maps notice types to consistent default tones and roles", () => {
+  it("maps representative notice types to consistent default tones and roles", () => {
     const notices: readonly SettingsNotice[] = [
       { type: "availability", content: "Configuration unavailable." },
       { type: "success", content: "Saved." },
@@ -41,7 +41,12 @@ describe("settings-panel-frame", () => {
     const values = collectTemplateValues(frame.render());
 
     expect(notices.map(settingsNoticeTone)).toEqual(["error", "success", "warning", "info"]);
-    expect(values).toEqual(expect.arrayContaining(["notice error", "alert", "notice success", "status", "notice warning", "note", "notice info"]));
+    expect(values.filter(isNoticeClassOrRole)).toEqual([
+      "notice error", "alert",
+      "notice success", "status",
+      "notice warning", "note",
+      "notice info", "note",
+    ]);
   });
 
   it("wires the default header action through the frame", () => {
@@ -144,4 +149,9 @@ function isStringArray(value: unknown): value is string[] {
 
 function isActionHandler(value: unknown): value is () => void {
   return typeof value === "function";
+}
+
+function isNoticeClassOrRole(value: unknown): value is string {
+  return typeof value === "string"
+    && (value.startsWith("notice ") || value === "alert" || value === "status" || value === "note");
 }

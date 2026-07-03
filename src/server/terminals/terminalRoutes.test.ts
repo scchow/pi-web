@@ -43,7 +43,7 @@ describe("terminal routes", () => {
     expect(terminals.events).toEqual([`close-cwd:${requestCwd}`]);
   });
 
-  it("creates and lists terminal command runs with filters", async () => {
+  it("routes command-run create, filter, cancel, and terminal continue requests", async () => {
     const createResponse = await app.inject({
       method: "POST",
       url: "/terminal-command-runs",

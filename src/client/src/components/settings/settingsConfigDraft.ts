@@ -12,10 +12,6 @@ export interface MachineAccessConfigDraft {
   uploadDefaultFolder: string;
 }
 
-export interface ConfigDraft extends GatewayServerConfigDraft {
-  allowedPathsText: string;
-}
-
 export function emptyGatewayServerConfigDraft(): GatewayServerConfigDraft {
   return { host: "", port: "", allowedHostsMode: "list", allowedHostsText: "" };
 }
@@ -40,10 +36,6 @@ export function machineAccessDraftFromConfig(config: PiWebConfigValues): Machine
   };
 }
 
-export function draftFromConfig(config: PiWebConfigValues): ConfigDraft {
-  return { ...gatewayServerDraftFromConfig(config), allowedPathsText: machineAccessDraftFromConfig(config).allowedPathsText };
-}
-
 export function gatewayServerConfigFromDraft(draft: GatewayServerConfigDraft, baseConfig: PiWebConfigValues = {}): PiWebConfigValues {
   const config = preservedGatewayConfigRemainder(baseConfig);
   const host = draft.host.trim();
@@ -65,14 +57,6 @@ export function machineAccessConfigPatchFromDraft(draft: MachineAccessConfigDraf
     pathAccess: { allowedPaths },
     uploads: uploadDefaultFolder === "" ? {} : { defaultFolder: uploadDefaultFolder },
   };
-}
-
-export function configFromDraft(draft: ConfigDraft, baseConfig: PiWebConfigValues = {}): PiWebConfigValues {
-  const config = gatewayServerConfigFromDraft(draft, baseConfig);
-  const allowedPaths = parseAllowedPathsText(draft.allowedPathsText);
-  if (allowedPaths.length > 0) config.pathAccess = { allowedPaths };
-  else delete config.pathAccess;
-  return config;
 }
 
 function preservedGatewayConfigRemainder(baseConfig: PiWebConfigValues): PiWebConfigValues {

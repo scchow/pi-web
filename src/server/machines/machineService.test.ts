@@ -24,6 +24,7 @@ describe("MachineService", () => {
     expect(await service.list()).toEqual([
       { id: "local", name: "Local", kind: "local", createdAt: "1970-01-01T00:00:00.000Z", updatedAt: "1970-01-01T00:00:00.000Z" },
     ]);
+    await expect(stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("adds remote machines and omits secrets from public responses", async () => {
@@ -38,8 +39,7 @@ describe("MachineService", () => {
     await expectOwnerOnlyMachineStore(storePath);
   });
 
-  it("tightens permissions after reading an existing machine store", async () => {
-    if (process.platform === "win32") return;
+  it.skipIf(process.platform === "win32")("tightens permissions after reading an existing machine store", async () => {
     await writeFile(storePath, `${JSON.stringify({
       machines: [{
         id: "remote-1",

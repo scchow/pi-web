@@ -3,6 +3,7 @@ import { api as defaultApi, type MessagePage, type PromptAttachment, type Sessio
 import type { SessionUiEvent } from "../sessionSocket";
 import { isCachedNewSessionInfo, loadCachedNewSessions, markCachedNewSessionInfo, rememberCachedNewSession } from "../cachedNewSessions";
 import { initialAppState, type AppState } from "../appState";
+import { ChatTranscriptStore } from "../chatTranscriptStore";
 import { machineSessionKey } from "../machineKeys";
 import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import { loadDraft, saveDraft } from "../promptDraftStorage";
@@ -1414,8 +1415,10 @@ describe("SessionController", () => {
   });
 
   it("reloads the selected session from disk, discards the cached transcript, and re-fetches history", async () => {
-    Object.defineProperty(globalThis, "localStorage", { value: new MemoryStorage(), configurable: true });
     const persistedSession = { ...oldSession, persisted: true };
+    const cacheKey = sessionKey(oldSession.id);
+    const freshPage: MessagePage = { messages: [{ role: "assistant", content: "fresh from disk" }], start: 1, total: 2 };
+    const cachedPages = new Map<string, MessagePage>([[cacheKey, { messages: [{ role: "user", content: "stale cached transcript" }], start: 0, total: 2 }]]);
     const reloadCalls: string[] = [];
     const messageCalls: string[] = [];
     let state: AppState = {
@@ -1433,7 +1436,7 @@ describe("SessionController", () => {
       },
       messages: (session) => {
         messageCalls.push(sessionLookupId(session));
-        return Promise.resolve(emptyPage);
+        return Promise.resolve(freshPage);
       },
       status: (session) => Promise.resolve(status(sessionLookupId(session))),
     };
@@ -1442,13 +1445,24 @@ describe("SessionController", () => {
       (patch) => { state = { ...state, ...patch }; },
       () => undefined,
       new InMemorySessionSelectionMemory(),
-      { api, socket: new FakeSocket() },
+      {
+        api,
+        socket: new FakeSocket(),
+        transcripts: new ChatTranscriptStore({
+          read: (sessionId) => cachedPages.get(sessionId),
+          write: (sessionId, page) => { cachedPages.set(sessionId, page); },
+          remove: (sessionId) => { cachedPages.delete(sessionId); },
+        }),
+      },
     );
 
     await controller.reloadSession(persistedSession);
 
     expect(reloadCalls).toEqual([oldSession.id]);
-    expect(messageCalls).toContain(oldSession.id);
+    expect(messageCalls).toEqual([oldSession.id]);
+    expect(cachedPages.get(cacheKey)).toEqual(freshPage);
+    expect(state.messages).toEqual([{ role: "assistant", parts: [{ type: "text", text: "fresh from disk" }] }]);
+    expect(state.messagePageStart).toBe(1);
     expect(state.error).toBe("");
   });
 

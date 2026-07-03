@@ -172,19 +172,30 @@ describe("PiWebPluginService", () => {
   });
 
   it("skips duplicate plugin ids", async () => {
-    await writePlugin(join(tempDir, "plugins", "one"), {
-      packageJson: { piWeb: { plugins: [{ id: "duplicate", module: "pi-web-plugin.js" }] } },
-      files: { "pi-web-plugin.js": "export default {};" },
+    const firstRoot = join(tempDir, "first-root");
+    const secondRoot = join(tempDir, "second-root");
+    await writePlugin(join(firstRoot, "duplicate"), {
+      packageJson: { piWeb: { plugins: [{ id: "duplicate", module: "first.js" }] } },
+      files: { "first.js": "export default {};" },
     });
-    await writePlugin(join(tempDir, "plugins", "two"), {
-      packageJson: { piWeb: { plugins: [{ id: "duplicate", module: "pi-web-plugin.js" }] } },
-      files: { "pi-web-plugin.js": "export default {};" },
+    await writePlugin(join(secondRoot, "duplicate"), {
+      packageJson: { piWeb: { plugins: [{ id: "duplicate", module: "second.js", machineSpecific: true }] } },
+      files: { "second.js": "export default {};" },
     });
 
-    const service = new PiWebPluginService({ roots: [{ path: join(tempDir, "plugins"), source: "test", scope: "local" }], packageProvider: false });
+    const service = new PiWebPluginService({
+      roots: [
+        { path: firstRoot, source: "first", scope: "local" },
+        { path: secondRoot, source: "second", scope: "local" },
+      ],
+      packageProvider: false,
+    });
 
     const manifest = await service.manifest();
-    expect(manifest.plugins.map((plugin) => plugin.id)).toEqual(["duplicate"]);
+    expect(manifest.plugins).toEqual([
+      expect.objectContaining({ id: "duplicate", source: "first", machineSpecific: false }),
+    ]);
+    expect(manifest.plugins[0]?.module).toMatch(/^\/pi-web-plugins\/duplicate\/first\.js\?v=\d+$/u);
   });
 
   it("skips legacy metadata shortcuts and unsafe module paths", async () => {

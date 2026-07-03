@@ -59,7 +59,7 @@ describe("settings-packages-panel layout", () => {
     expect(rendered).not.toContain("Pi package list unavailable");
   });
 
-  it("orders package load errors before the trusted-code warning while preserving loaded data", () => {
+  it("orders package errors before the trusted-code warning while preserving loaded data", () => {
     const panel = new SettingsPackagesPanel();
     panel.targetMachine = remoteTarget;
     panel.packagesResponse = { packages: [packageInfo("npm:@acme/tools")] };

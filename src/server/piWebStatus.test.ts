@@ -90,8 +90,7 @@ describe("PI WEB status", () => {
     expect(status.messages.map((message) => message.id)).toContain("sessiond-stale");
   });
 
-  it("suggests native systemd commands for local development services", async () => {
-    if (process.platform !== "linux") return;
+  it.skipIf(process.platform !== "linux")("suggests native systemd commands for local development services", async () => {
     process.env["PI_WEB_SKIP_VERSION_CHECK"] = "1";
     disableDockerRuntimeEnv();
     const home = await tempHome();
