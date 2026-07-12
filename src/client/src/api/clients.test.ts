@@ -64,7 +64,7 @@ describe("machine-scoped runtime API", () => {
     await piWebApi.checkForUpdates();
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchCall(fetchMock, 0)[0]).toBe("/api/pi-web/status?refresh=1");
+    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/pi-web/status?refresh=1");
     expect(fetchCall(fetchMock, 0)[1]?.cache).toBe("no-store");
   });
 
@@ -74,7 +74,7 @@ describe("machine-scoped runtime API", () => {
     await piWebApi.checkForUpdates("remote a");
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchCall(fetchMock, 0)[0]).toBe("/api/machines/remote%20a/pi-web/status?refresh=1");
+    expect(fetchCall(fetchMock, 0)[0]).toBe("https://pi.example.test/api/machines/remote%20a/pi-web/status?refresh=1");
     expect(fetchCall(fetchMock, 0)[1]?.cache).toBe("no-store");
   });
 
