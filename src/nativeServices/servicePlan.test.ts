@@ -123,14 +123,12 @@ describe("production native service planning", () => {
         backend,
         shell,
         workingDirectory: null,
-        prerequisites: [{ id: "sessiond.command.pi-web-sessiond" }, { id: "sessiond.node" }],
-      },
-      {
-        purpose: "plan-validation",
-        backend,
-        shell,
-        workingDirectory: null,
-        prerequisites: [{ id: "web.command.pi-web-server" }, { id: "web.node" }],
+        prerequisites: [
+          { id: "sessiond.command.pi-web-sessiond" },
+          { id: "sessiond.node" },
+          { id: "web.command.pi-web-server" },
+          { id: "web.node" },
+        ],
       },
     ]);
   });
@@ -253,7 +251,7 @@ describe("production native service planning", () => {
     const fileExists = vi.fn<(path: string) => boolean>(() => true);
     const resolution = await resolveProductionNativeServicePlan(productionInput(), {
       probe: {
-        run: () => Promise.resolve({ kind: "infrastructure-failure", message: "launchd probe cleanup failed" }),
+        run: () => Promise.resolve({ kind: "infrastructure-failure", reason: "cleanup", message: "launchd probe cleanup failed" }),
       },
       fileExists,
     });
@@ -264,6 +262,7 @@ describe("production native service planning", () => {
       failures: [{
         kind: "probe-infrastructure",
         serviceIds: ["sessiond", "web"],
+        reason: "cleanup",
         message: "launchd probe cleanup failed",
       }],
     });
@@ -276,7 +275,7 @@ describe("production native service planning", () => {
     });
     expect(thrown).toMatchObject({
       ok: false,
-      failures: [{ kind: "probe-infrastructure", message: "systemd-run failed" }],
+      failures: [{ kind: "probe-infrastructure", reason: "manager", message: "systemd-run failed" }],
     });
 
     const malformed = await resolveProductionNativeServicePlan(productionInput(), {
@@ -290,7 +289,7 @@ describe("production native service planning", () => {
     });
     expect(malformed).toMatchObject({
       ok: false,
-      failures: [{ kind: "probe-infrastructure", message: "Authoritative probe returned no outcome for web.command.pi-web-server." }],
+      failures: [{ kind: "probe-infrastructure", reason: "malformed-output", message: "Authoritative probe returned no outcome for web.command.pi-web-server." }],
     });
   });
 });
@@ -349,8 +348,19 @@ describe("development native service planning", () => {
     expect(serviceCommandRequirements).not.toContain("pi-web-sessiond");
 
     expect(planValidationProbeRequests(plan)).toMatchObject([
-      { backend: { kind: "launchd" }, workingDirectory: "/checkout with space" },
-      { backend: { kind: "launchd" }, workingDirectory: "/checkout with space" },
+      {
+        backend: { kind: "launchd" },
+        workingDirectory: "/checkout with space",
+        prerequisites: [
+          { id: "sessiond.node" },
+          { id: "sessiond.command.npm" },
+          { id: "sessiond.package-scripts" },
+          { id: "uiDev.node" },
+          { id: "uiDev.command.npm" },
+          { id: "uiDev.command.bash" },
+          { id: "uiDev.package-scripts" },
+        ],
+      },
     ]);
   });
 });

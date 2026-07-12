@@ -4,6 +4,7 @@ export type NativeServiceId = "sessiond" | "web" | "uiDev";
 export type ProductionNativeServiceId = Extract<NativeServiceId, "sessiond" | "web">;
 export type NativeServiceShellName = "bash" | "zsh" | "fish";
 export type NativeServiceRestartPolicy = "on-failure" | "never";
+export type NativeServiceProbeInfrastructureReason = "manager" | "timeout" | "malformed-output" | "cleanup";
 
 export interface NativeServiceBackend {
   kind: NativeServiceBackendKind;
@@ -123,6 +124,7 @@ export type NativeServiceProbeResult =
     }
   | {
       kind: "infrastructure-failure";
+      reason: NativeServiceProbeInfrastructureReason;
       message: string;
     };
 
@@ -167,6 +169,7 @@ export type NativeServicePlanFailure =
   | {
       kind: "probe-infrastructure";
       serviceIds: readonly ProductionNativeServiceId[];
+      reason: NativeServiceProbeInfrastructureReason;
       message: string;
     }
   | {
@@ -187,7 +190,23 @@ export type NativeServicePlanResolution =
   | { ok: true; plan: NativeServicePlan }
   | { ok: false; failures: readonly NativeServicePlanFailure[] };
 
-const nativeServiceRefs: Readonly<Record<NativeServiceId, NativeServiceManagerRef>> = {
+export type NativeServicePlanValidationFailure =
+  | {
+      kind: "prerequisite-unsatisfied";
+      prerequisite: NativeServicePrerequisite;
+      detail: string | null;
+    }
+  | {
+      kind: "probe-infrastructure";
+      reason: NativeServiceProbeInfrastructureReason;
+      message: string;
+    };
+
+export type NativeServicePlanValidation =
+  | { ok: true }
+  | { ok: false; failures: readonly NativeServicePlanValidationFailure[] };
+
+export const nativeServiceManagerRefs: Readonly<Record<NativeServiceId, NativeServiceManagerRef>> = {
   sessiond: {
     systemdName: "pi-web-sessiond.service",
     launchdLabel: "com.pi-web.sessiond",
@@ -208,7 +227,7 @@ const nativeServiceRefs: Readonly<Record<NativeServiceId, NativeServiceManagerRe
   },
 };
 
-const productionServiceIds = ["sessiond", "web"] as const satisfies readonly ProductionNativeServiceId[];
+export const productionNativeServiceIds = ["sessiond", "web"] as const satisfies readonly ProductionNativeServiceId[];
 
 export async function resolveProductionNativeServicePlan(
   input: ProductionNativeServicePlanInput,
@@ -218,7 +237,7 @@ export async function resolveProductionNativeServicePlan(
   const selectionRequirements: NativeServicePrerequisite[] = [];
   const serviceIdsToProbe: ProductionNativeServiceId[] = [];
 
-  for (const serviceId of productionServiceIds) {
+  for (const serviceId of productionNativeServiceIds) {
     const executable = input.executables[serviceId];
     if (hasConfiguredCommand(executable.configuredCommand)) {
       configuredStrategies.set(serviceId, {
@@ -239,7 +258,7 @@ export async function resolveProductionNativeServicePlan(
     if (probeResult.kind === "infrastructure-failure") {
       return {
         ok: false,
-        failures: [{ kind: "probe-infrastructure", serviceIds: serviceIdsToProbe, message: probeResult.message }],
+        failures: [{ kind: "probe-infrastructure", serviceIds: serviceIdsToProbe, reason: probeResult.reason, message: probeResult.message }],
       };
     }
 
@@ -247,7 +266,7 @@ export async function resolveProductionNativeServicePlan(
     if (parsedOutcomes.kind === "infrastructure-failure") {
       return {
         ok: false,
-        failures: [{ kind: "probe-infrastructure", serviceIds: serviceIdsToProbe, message: parsedOutcomes.message }],
+        failures: [{ kind: "probe-infrastructure", serviceIds: serviceIdsToProbe, reason: parsedOutcomes.reason, message: parsedOutcomes.message }],
       };
     }
     outcomes = parsedOutcomes.outcomes;
@@ -309,7 +328,7 @@ export async function resolveProductionNativeServicePlan(
       mode: "production",
       backend: input.backend,
       shell: input.shell,
-      services: productionServiceIds.map((serviceId) => productionService(input, serviceId, requiredStrategy(strategies, serviceId))),
+      services: productionNativeServiceIds.map((serviceId) => productionService(input, serviceId, requiredStrategy(strategies, serviceId))),
     },
   };
 }
@@ -327,7 +346,7 @@ export function createDevelopmentNativeServicePlan(input: DevelopmentNativeServi
     services: [
       {
         id: "sessiond",
-        manager: nativeServiceRefs.sessiond,
+        manager: nativeServiceManagerRefs.sessiond,
         description: "PI WEB session daemon (dev)",
         shellCommand: "exec npm run start:sessiond",
         strategy: { kind: "development-npm-script", script: "start:sessiond" },
@@ -344,7 +363,7 @@ export function createDevelopmentNativeServicePlan(input: DevelopmentNativeServi
       },
       {
         id: "uiDev",
-        manager: nativeServiceRefs.uiDev,
+        manager: nativeServiceManagerRefs.uiDev,
         description: "PI WEB UI dev server",
         shellCommand: `exec /usr/bin/env bash -c ${shellSingleQuote(input.shell.name, uiDevCommand)}`,
         strategy: { kind: "development-npm-script-group", scripts: uiDevScripts, interpreter: "bash" },
@@ -365,14 +384,64 @@ export function createDevelopmentNativeServicePlan(input: DevelopmentNativeServi
 }
 
 export function planValidationProbeRequests(plan: NativeServicePlan): readonly NativeServiceProbeRequest[] {
-  return plan.services.flatMap((service) => service.prerequisites.length === 0 ? [] : [{
-    purpose: "plan-validation" as const,
-    backend: plan.backend,
-    shell: plan.shell,
-    environment: service.environment,
-    workingDirectory: service.workingDirectory,
-    prerequisites: service.prerequisites,
-  }]);
+  const requests: (Omit<NativeServiceProbeRequest, "prerequisites"> & { prerequisites: NativeServicePrerequisite[] })[] = [];
+  for (const service of plan.services) {
+    if (service.prerequisites.length === 0) continue;
+    const existing = requests.find((request) =>
+      request.workingDirectory === service.workingDirectory
+      && environmentsEqual(request.environment, service.environment));
+    if (existing === undefined) {
+      requests.push({
+        purpose: "plan-validation",
+        backend: plan.backend,
+        shell: plan.shell,
+        environment: service.environment,
+        workingDirectory: service.workingDirectory,
+        prerequisites: [...service.prerequisites],
+      });
+      continue;
+    }
+    existing.prerequisites.push(...service.prerequisites);
+  }
+  return requests;
+}
+
+export async function validateNativeServicePlan(
+  plan: NativeServicePlan,
+  probe: NativeServiceAuthoritativeProbe,
+): Promise<NativeServicePlanValidation> {
+  const failures: NativeServicePlanValidationFailure[] = [];
+  for (const request of planValidationProbeRequests(plan)) {
+    let result: NativeServiceProbeResult;
+    try {
+      result = await probe.run(request);
+    } catch (error: unknown) {
+      return {
+        ok: false,
+        failures: [{ kind: "probe-infrastructure", reason: "manager", message: errorMessage(error) }],
+      };
+    }
+    if (result.kind === "infrastructure-failure") {
+      return {
+        ok: false,
+        failures: [{ kind: "probe-infrastructure", reason: result.reason, message: result.message }],
+      };
+    }
+    const parsed = probeOutcomes(request.prerequisites, result.outcomes);
+    if (parsed.kind === "infrastructure-failure") {
+      return {
+        ok: false,
+        failures: [{ kind: "probe-infrastructure", reason: parsed.reason, message: parsed.message }],
+      };
+    }
+    for (const prerequisite of request.prerequisites) {
+      const outcome = parsed.outcomes.get(prerequisite.id);
+      if (outcome?.status === "unsatisfied") {
+        failures.push({ kind: "prerequisite-unsatisfied", prerequisite, detail: outcome.detail });
+      }
+    }
+  }
+  return failures.length === 0 ? { ok: true } : { ok: false, failures };
 }
 
 function productionService(
@@ -383,7 +452,7 @@ function productionService(
   const isWeb = serviceId === "web";
   return {
     id: serviceId,
-    manager: nativeServiceRefs[serviceId],
+    manager: nativeServiceManagerRefs[serviceId],
     description: isWeb ? "PI WEB server" : "PI WEB session daemon",
     shellCommand: `exec ${strategyCommand(input.shell, strategy)}`,
     strategy,
@@ -439,30 +508,30 @@ async function runSelectionProbe(
       prerequisites,
     });
   } catch (error: unknown) {
-    return { kind: "infrastructure-failure", message: errorMessage(error) };
+    return { kind: "infrastructure-failure", reason: "manager", message: errorMessage(error) };
   }
 }
 
 function probeOutcomes(
   prerequisites: readonly NativeServicePrerequisite[],
   outcomes: readonly NativeServicePrerequisiteOutcome[],
-): { kind: "completed"; outcomes: Map<string, NativeServicePrerequisiteOutcome> } | { kind: "infrastructure-failure"; message: string } {
+): { kind: "completed"; outcomes: Map<string, NativeServicePrerequisiteOutcome> } | { kind: "infrastructure-failure"; reason: "malformed-output"; message: string } {
   const expectedIds = new Set(prerequisites.map((prerequisite) => prerequisite.id));
   const byId = new Map<string, NativeServicePrerequisiteOutcome>();
 
   for (const outcome of outcomes) {
     if (!expectedIds.has(outcome.prerequisiteId)) {
-      return { kind: "infrastructure-failure", message: `Authoritative probe returned unexpected outcome ${outcome.prerequisiteId}.` };
+      return { kind: "infrastructure-failure", reason: "malformed-output", message: `Authoritative probe returned unexpected outcome ${outcome.prerequisiteId}.` };
     }
     if (byId.has(outcome.prerequisiteId)) {
-      return { kind: "infrastructure-failure", message: `Authoritative probe returned duplicate outcome ${outcome.prerequisiteId}.` };
+      return { kind: "infrastructure-failure", reason: "malformed-output", message: `Authoritative probe returned duplicate outcome ${outcome.prerequisiteId}.` };
     }
     byId.set(outcome.prerequisiteId, outcome);
   }
 
   const missing = prerequisites.find((prerequisite) => !byId.has(prerequisite.id));
   if (missing !== undefined) {
-    return { kind: "infrastructure-failure", message: `Authoritative probe returned no outcome for ${missing.id}.` };
+    return { kind: "infrastructure-failure", reason: "malformed-output", message: `Authoritative probe returned no outcome for ${missing.id}.` };
   }
   return { kind: "completed", outcomes: byId };
 }
@@ -533,6 +602,16 @@ function shellSingleQuote(shell: NativeServiceShellName, value: string): string 
 
 function copyEnvironment(environment: Readonly<Record<string, string>>): Readonly<Record<string, string>> {
   return { ...environment };
+}
+
+function environmentsEqual(
+  left: Readonly<Record<string, string>>,
+  right: Readonly<Record<string, string>>,
+): boolean {
+  const leftEntries = Object.entries(left);
+  const rightEntries = Object.entries(right);
+  return leftEntries.length === rightEntries.length
+    && leftEntries.every(([key, value]) => right[key] === value);
 }
 
 function errorMessage(error: unknown): string {
