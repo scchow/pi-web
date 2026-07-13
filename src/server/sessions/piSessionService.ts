@@ -1363,6 +1363,15 @@ export class PiSessionService {
     this.unregisterSubsession(session.sessionId);
   }
 
+  async clearQueue(ref: PiSessionLookup): Promise<ClientSessionStatus> {
+    await this.assertWritable(ref);
+    const session = await this.getOrOpen(ref);
+    this.clearCompactionPromptQueue(session.sessionId);
+    clearSessionQueue(session);
+    this.publishStatus(session);
+    return this.statusFromSession(session);
+  }
+
   async abort(ref: PiSessionLookup): Promise<void> {
     const active = this.activeForLookup(ref);
     if (active === undefined) return;

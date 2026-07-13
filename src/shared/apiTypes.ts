@@ -6,6 +6,7 @@ export const PI_WEB_CAPABILITIES = {
   sessionsBulkMutations: "sessions.bulkMutations",
   sessionsCleanup: "sessions.cleanup",
   sessionsReload: "sessions.reload",
+  sessionsClearQueue: "sessions.clearQueue",
   sessionsPersistedState: "sessions.persistedState",
   promptAttachments: "prompt.attachments",
   workspaceFileSuggestions: "workspace.fileSuggestions",
