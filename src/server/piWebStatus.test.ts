@@ -192,24 +192,42 @@ describe("PI WEB status", () => {
     const updateCommand = await updateCommandFor(
       { kind: "pi-package", source: "npm:@jmfederico/pi-web", scope: "user", path: "/tmp/pi-web" },
       "pi-web restart",
-      { agentCommand: undefined, hasCommand },
+      { activeAgentProfile: undefined, hasCommand },
     );
 
     expect(updateCommand).toBeUndefined();
     expect(hasCommand).not.toHaveBeenCalled();
   });
 
-  it("shell-quotes pi-package agent update commands", async () => {
+  it("preserves and shell-quotes the active state profile in Pi-package update commands", async () => {
+    const command = "/tmp/agent's/pi";
+    const dir = "/tmp/profile's/state";
     const updateCommand = await updateCommandFor(
       { kind: "pi-package", source: "npm:@jmfederico/pi-web", scope: "user", path: "/tmp/pi-web" },
       "pi-web restart",
       {
-        agentCommand: "/tmp/agent's/alt-agent",
-        hasCommand: (command) => Promise.resolve(command === "/tmp/agent's/alt-agent"),
+        activeAgentProfile: activeProfile("a", command, dir),
+        hasCommand: (candidate) => Promise.resolve(candidate === command),
       },
     );
 
-    expect(updateCommand).toBe("'/tmp/agent'\\''s/alt-agent' update 'npm:@jmfederico/pi-web' && pi-web restart");
+    expect(updateCommand).toBe("PI_CODING_AGENT_DIR='/tmp/profile'\\''s/state' '/tmp/agent'\\''s/pi' update 'npm:@jmfederico/pi-web' && pi-web restart");
+  });
+
+  it.each([
+    activeProfile("a", "acme-agent", "/opt/acme/state"),
+    activeProfile("b", "pi", "relative/state"),
+  ])("suppresses Pi-package updates when the active companion profile cannot be represented safely", async (profile) => {
+    const hasCommand = vi.fn(() => Promise.resolve(true));
+
+    const updateCommand = await updateCommandFor(
+      { kind: "pi-package", source: "npm:@jmfederico/pi-web", scope: "user", path: "/tmp/pi-web" },
+      "pi-web restart",
+      { activeAgentProfile: profile, hasCommand },
+    );
+
+    expect(updateCommand).toBeUndefined();
+    expect(hasCommand).not.toHaveBeenCalled();
   });
 
   it.skipIf(process.platform !== "linux")("suggests native systemd commands for local development services", async () => {

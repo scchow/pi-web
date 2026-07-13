@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parsePiWebConfigResponseBody, registerConfigRoutes, registerLocalMachineConfigRoutes, type PiWebConfigService } from "./configRoutes.js";
+import { parsePiWebConfigResponseBody, parseSelectedMachineConfigRequest, registerConfigRoutes, registerLocalMachineConfigRoutes, type PiWebConfigService } from "./configRoutes.js";
 import type { PiWebConfigResponse, PiWebConfigValues } from "../shared/apiTypes.js";
 
 let app: FastifyInstance;
@@ -112,6 +112,21 @@ describe("config routes", () => {
     expect(service.write).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { agent: { command: "./agent", dir: "/srv/agent" }, error: "safe bare executable name or host-absolute executable path" },
+    { agent: { command: "agent", dir: "/srv/agent", futureSetting: true }, error: 'agent contains unknown key "futureSetting"' },
+  ])("rejects unsafe agent profile payloads before writing", async ({ agent, error }) => {
+    const response = await app.inject({
+      method: "PUT",
+      url: "/api/config",
+      payload: { config: { agent } },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: string }>().error).toContain(error);
+    expect(service.write).not.toHaveBeenCalled();
+  });
+
   it("filters local machine config reads to selected-machine-safe keys", async () => {
     savedConfig = fullConfig();
 
@@ -159,6 +174,20 @@ describe("config routes", () => {
       subsessions: false,
       agent: { command: "alternate-agent", dir: "/srv/alternate-agent" },
     });
+  });
+
+  it("keeps foreign-platform agent paths portable at federation transport boundaries", () => {
+    const agent = { command: "C:\\tools\\pi.exe", dir: "C:\\agent-profiles\\pi" };
+    const response = {
+      ...responseFor({ agent }, true),
+      effectiveConfig: { agent },
+    };
+
+    expect(parsePiWebConfigResponseBody(response).config.agent).toEqual(agent);
+    expect(parseSelectedMachineConfigRequest({ agent }, "portable").agent).toEqual(agent);
+    if (process.platform !== "win32") {
+      expect(() => parseSelectedMachineConfigRequest({ agent })).toThrow("host-absolute executable path");
+    }
   });
 
   it("defaults missing agent override fields from older config responses", () => {

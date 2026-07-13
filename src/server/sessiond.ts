@@ -20,17 +20,18 @@ import { TerminalService } from "./terminals/terminalService.js";
 import { registerTerminalRoutes } from "./terminals/terminalRoutes.js";
 import { getPiWebRuntimeComponent } from "./piWebStatus.js";
 import { SESSIOND_RUNTIME_CAPABILITIES } from "../shared/capabilities.js";
-import { agentSessionDirEnvKeys, effectivePiWebConfig, maxUploadBytes, spawnSessionsEnabled, subsessionsEnabled } from "../config.js";
+import { agentSessionDirEnvKeys, effectivePiWebConfig, maxUploadBytes } from "../config.js";
 import { createActiveAgentProfileDescriptor } from "../sessiond/activeAgentProfile.js";
 import { runSessionDaemonStartup } from "./sessiond/sessionDaemonStartup.js";
 
-const { config } = effectivePiWebConfig();
+const daemonEnvironment: NodeJS.ProcessEnv = Object.freeze({ ...process.env });
+const { config } = effectivePiWebConfig({ env: daemonEnvironment });
 const activeAgentProfile = createActiveAgentProfileDescriptor({
   command: config.agent.command,
   dir: config.agent.dir,
   sessionDirEnvKeys: agentSessionDirEnvKeys(config.agent.command),
 });
-const app = Fastify({ logger: true, bodyLimit: maxUploadBytes(process.env, config) });
+const app = Fastify({ logger: true, bodyLimit: maxUploadBytes(daemonEnvironment, config) });
 await app.register(fastifyWebsocket);
 
 await runSessionDaemonStartup({
@@ -39,7 +40,7 @@ await runSessionDaemonStartup({
     const eventHub = new SessionEventHub();
     const workspaceActivity = new WorkspaceActivityService(eventHub);
     const auth = new AuthService({ agentDir: activeAgentProfile.dir });
-    const spawnTargets = spawnSessionsEnabled(process.env, config)
+    const spawnTargets = config.spawnSessions
       ? new ProjectScopedSpawnTargetResolver({ projects: new ProjectService(new ProjectStore()), workspaces: new WorkspaceService() })
       : undefined;
     const sessions = new PiSessionService(eventHub, {
@@ -48,9 +49,10 @@ await runSessionDaemonStartup({
       workspaceActivity,
       logger: app.log,
       ...(spawnTargets === undefined ? {} : { spawnTargets }),
-      subsessionsEnabled: spawnTargets !== undefined && subsessionsEnabled(process.env, config),
+      subsessionsEnabled: spawnTargets !== undefined && config.subsessions,
       sessionManager: createPiSessionManagerGateway({
         agentDir: activeAgentProfile.dir,
+        env: daemonEnvironment,
         sessionDirEnvKeys: activeAgentProfile.sessionDirEnvKeys,
       }),
     });
@@ -98,9 +100,9 @@ await runSessionDaemonStartup({
     process.once("SIGINT", (signal) => { void shutdown(signal); });
     process.once("SIGTERM", (signal) => { void shutdown(signal); });
 
-    const portValue = process.env["PI_WEB_SESSIOND_PORT"];
+    const portValue = daemonEnvironment["PI_WEB_SESSIOND_PORT"];
     const port = portValue !== undefined && portValue !== "" ? Number(portValue) : undefined;
-    const host = process.env["PI_WEB_SESSIOND_HOST"] ?? "127.0.0.1";
+    const host = daemonEnvironment["PI_WEB_SESSIOND_HOST"] ?? "127.0.0.1";
 
     if (port !== undefined) {
       await app.listen({ port, host });

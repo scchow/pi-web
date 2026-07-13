@@ -69,7 +69,7 @@ async function proxySelectedMachineConfigRequest(client: MachineClient, machineI
   }
 
   if (method === "PUT") {
-    const patch = parseSelectedMachineConfigRequest(configPayload(body));
+    const patch = parseSelectedMachineConfigRequest(configPayload(body), "portable");
     const currentResponse = await client.requestJson("GET", remotePath);
     if (!isSuccessfulStatus(currentResponse.statusCode)) return sendUpstreamJsonResponse(reply, currentResponse, machineId);
 

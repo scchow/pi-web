@@ -3,7 +3,6 @@ import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { agentSessionDirEnvKeys, effectiveAgentConfig } from "../../config.js";
 import { canonicalizeStoredCwd, cwdPathsEqual } from "../workingDirectory.js";
 import type { PiSessionListEntry, PiSessionManager, PiSessionManagerGateway } from "./piSessionService.js";
 
@@ -16,20 +15,23 @@ export interface SessionDirResolution {
 }
 
 export interface SessionDirResolverOptions {
-  agentDir?: string;
-  env?: NodeJS.ProcessEnv;
-  sessionDirEnvKeys?: readonly string[];
+  agentDir: string;
+  env: Readonly<NodeJS.ProcessEnv>;
+  sessionDirEnvKeys: readonly string[];
 }
 
 export class SessionDirResolver {
   private readonly agentDir: string;
-  private readonly env: NodeJS.ProcessEnv;
-  private readonly sessionDirEnvKeys: readonly string[];
+  private readonly envSessionDir: string | undefined;
+  private readonly homeDir: string;
 
-  constructor(options: SessionDirResolverOptions = {}) {
-    this.agentDir = options.agentDir ?? effectiveAgentConfig().dir;
-    this.env = options.env ?? process.env;
-    this.sessionDirEnvKeys = options.sessionDirEnvKeys ?? agentSessionDirEnvKeys();
+  constructor(options: SessionDirResolverOptions) {
+    this.agentDir = options.agentDir;
+    this.envSessionDir = options.sessionDirEnvKeys
+      .map((key) => options.env[key])
+      .find((value) => value !== undefined && value !== "");
+    const configuredHome = options.env["HOME"];
+    this.homeDir = configuredHome !== undefined && configuredHome !== "" && isAbsolute(configuredHome) ? configuredHome : homedir();
   }
 
   defaultSessionsRoot(): string {
@@ -37,34 +39,28 @@ export class SessionDirResolver {
   }
 
   globalEnvSessionDir(): string | undefined {
-    const envSessionDir = this.envSessionDir();
-    if (envSessionDir === undefined) return undefined;
-    const expanded = expandTildePath(envSessionDir);
+    if (this.envSessionDir === undefined) return undefined;
+    const expanded = expandTildePath(this.envSessionDir, this.homeDir);
     return isAbsolute(expanded) ? expanded : undefined;
   }
 
   resolve(cwd: string): SessionDirResolution {
-    const envSessionDir = this.envSessionDir();
-    if (envSessionDir !== undefined) {
-      return { source: "env", sessionDir: resolveConfiguredPath(envSessionDir, cwd), usesConfiguredSessionDir: true };
+    if (this.envSessionDir !== undefined) {
+      return { source: "env", sessionDir: resolveConfiguredPath(this.envSessionDir, cwd, this.homeDir), usesConfiguredSessionDir: true };
     }
 
     const settingsSessionDir = SettingsManager.create(cwd, this.agentDir).getSessionDir();
     if (settingsSessionDir !== undefined && settingsSessionDir !== "") {
-      return { source: "settings", sessionDir: resolveConfiguredPath(settingsSessionDir, cwd), usesConfiguredSessionDir: true };
+      return { source: "settings", sessionDir: resolveConfiguredPath(settingsSessionDir, cwd, this.homeDir), usesConfiguredSessionDir: true };
     }
 
     return { source: "pi-default", sessionDir: defaultPiSessionDir(cwd, this.agentDir), usesConfiguredSessionDir: false };
-  }
-
-  private envSessionDir(): string | undefined {
-    return this.sessionDirEnvKeys.map((key) => this.env[key]).find((value) => value !== undefined && value !== "");
   }
 }
 
 export type PiSessionManagerGatewayOptions = SessionDirResolverOptions;
 
-export function createPiSessionManagerGateway(options: PiSessionManagerGatewayOptions = {}): PiSessionManagerGateway {
+export function createPiSessionManagerGateway(options: PiSessionManagerGatewayOptions): PiSessionManagerGateway {
   return new SettingsAwarePiSessionManagerGateway(new SessionDirResolver(options));
 }
 
@@ -105,7 +101,7 @@ export async function listSessionsInDir(sessionDir: string): Promise<PiSessionLi
   return sessions.map((session) => ({ ...session, cwd: canonicalizeStoredCwd(session.cwd) }));
 }
 
-export async function listSessionsInDefaultPiStore(storeRoot = defaultPiSessionsRoot()): Promise<PiSessionListEntry[]> {
+export async function listSessionsInDefaultPiStore(storeRoot: string): Promise<PiSessionListEntry[]> {
   let entries: Dirent[];
   try {
     entries = await readdir(storeRoot, { withFileTypes: true });
@@ -130,11 +126,11 @@ function uniqueSessionsByPath(sessions: readonly PiSessionListEntry[]): PiSessio
   return [...byPath.values()].sort((a, b) => b.modified.getTime() - a.modified.getTime());
 }
 
-export function defaultPiSessionsRoot(agentDir = effectiveAgentConfig().dir): string {
+export function defaultPiSessionsRoot(agentDir: string): string {
   return join(agentDir, "sessions");
 }
 
-export function defaultPiSessionDir(cwd: string, agentDir = effectiveAgentConfig().dir): string {
+export function defaultPiSessionDir(cwd: string, agentDir: string): string {
   return sessionDirInDefaultPiStore(defaultPiSessionsRoot(agentDir), cwd);
 }
 
@@ -143,13 +139,13 @@ export function sessionDirInDefaultPiStore(storeRoot: string, cwd: string): stri
   return join(storeRoot, safePath);
 }
 
-export function resolveConfiguredPath(path: string, cwd: string): string {
-  const expanded = expandTildePath(path);
+export function resolveConfiguredPath(path: string, cwd: string, homeDir: string): string {
+  const expanded = expandTildePath(path, homeDir);
   return isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
 }
 
-function expandTildePath(path: string): string {
-  if (path === "~") return homedir();
-  if (path.startsWith("~/")) return join(homedir(), path.slice(2));
+function expandTildePath(path: string, homeDir: string): string {
+  if (path === "~") return homeDir;
+  if (path.startsWith("~/")) return join(homeDir, path.slice(2));
   return path;
 }

@@ -68,6 +68,11 @@ describe("agentCommandForChecks", () => {
       delete process.env["PI_WEB_AGENT_COMMAND"];
 
       expect(agentCommandForChecks()).toBe("acme-agent");
+      expect(agentCommandForChecks({
+        PI_WEB_CONFIG: configPath,
+        PI_WEB_AGENT_COMMAND: "environment-agent",
+        PI_WEB_AGENT_DIR: join(dir, "environment-agent-state"),
+      })).toBe("environment-agent");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -25,8 +25,6 @@ import type { ActiveSession } from "./sessionRuntimeStore.js";
 import { createModelRegistryForAgentDir, type AuthChange } from "./authService.js";
 import { deterministicSessionName, fallbackSessionName, generateShortSessionName } from "./sessionNameGenerator.js";
 import { computeEditPreview, type EditPreviewResult } from "./editPreview.js";
-import { createPiSessionManagerGateway } from "./piSessionManagerGateway.js";
-import { effectiveAgentConfig } from "../../config.js";
 import { attachmentsToInlineImages, saveAttachmentsToWorkspace } from "./attachmentService.js";
 import { parsePromptAttachments } from "../../shared/promptAttachments.js";
 import type { SavedPromptAttachment, SessionBulkArchiveResponse, SessionBulkDeleteArchivedResponse, SessionBulkFailure, SessionBulkMutationRef } from "../../shared/apiTypes.js";
@@ -380,9 +378,9 @@ function createPiWebEditToolDefinition(cwd: string) {
 }
 
 export interface PiSessionServiceDependencies {
+  agentDir: string;
+  sessionManager: PiSessionManagerGateway;
   archiveStore?: SessionArchiveRepository;
-  agentDir?: string;
-  sessionManager?: PiSessionManagerGateway;
   createRuntime?: PiWebCreateAgentSessionRuntimeFactory;
   createAgentRuntime?: CreateAgentRuntime;
   modelRegistry?: ModelRegistryInstance;
@@ -441,10 +439,10 @@ export class PiSessionService implements SessionRouteService {
   private readonly logger: PiSessionLogger;
   private readonly now: () => Date;
 
-  constructor(private readonly events: SessionEventHub, deps: PiSessionServiceDependencies = {}) {
+  constructor(private readonly events: SessionEventHub, deps: PiSessionServiceDependencies) {
     this.archiveStore = deps.archiveStore ?? new SessionArchiveStore();
-    this.agentDir = deps.agentDir ?? effectiveAgentConfig().dir;
-    this.sessionManager = deps.sessionManager ?? createPiSessionManagerGateway({ agentDir: this.agentDir });
+    this.agentDir = deps.agentDir;
+    this.sessionManager = deps.sessionManager;
     this.modelRegistry = deps.modelRegistry ?? createModelRegistryForAgentDir(this.agentDir);
     this.spawnTargets = deps.spawnTargets;
     this.logger = deps.logger ?? noopLogger;

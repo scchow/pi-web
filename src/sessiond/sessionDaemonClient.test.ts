@@ -43,6 +43,19 @@ describe("SessionDaemonClient active agent profile protocol", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32")("rejects foreign-platform active state paths before local consumers use them", async () => {
+    const client = new SessionDaemonClient();
+    vi.spyOn(client, "request").mockResolvedValue(runtimeResponse({
+      ...activeAgentProfile,
+      dir: "C:\\agent-profiles\\acme",
+    }));
+
+    await expect(client.getActiveAgentProfile()).resolves.toEqual({
+      status: "invalid",
+      error: "session daemon active agent profile was not valid for this host",
+    });
+  });
+
   it("treats a legacy runtime response without a profile as invalid for profile-dependent work", async () => {
     const client = new SessionDaemonClient();
     vi.spyOn(client, "request").mockResolvedValue(runtimeResponse(undefined));

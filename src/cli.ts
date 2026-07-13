@@ -5,7 +5,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { defaultPiWebConfigPath, defaultPiWebDataDir, effectiveAgentConfig, effectivePiWebConfig, examplePiWebConfig } from "./config.js";
+import { defaultPiWebConfigPath, defaultPiWebDataDir, effectivePiWebConfig, examplePiWebConfig } from "./config.js";
 import { packageVersion, printPiWebVersionReport } from "./piWebVersionReport.js";
 import { checkNodePtyDarwinSpawnHelper, formatNodePtyDarwinSpawnHelperCheck } from "./server/diagnostics/nodePtySpawnHelper.js";
 import {
@@ -780,7 +780,7 @@ function nodeVersionCheck(): string {
 }
 
 export function agentCommandForChecks(env: NodeJS.ProcessEnv = process.env): string {
-  return effectiveAgentConfig(env, effectivePiWebConfig({ env }).config).command;
+  return effectivePiWebConfig({ env }).config.agent.command;
 }
 
 function generalDoctorChecks(): Check[] {

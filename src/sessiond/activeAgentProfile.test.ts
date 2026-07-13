@@ -17,7 +17,7 @@ describe("active agent profile descriptor", () => {
     expect(first.revision).toMatch(/^sha256:[0-9a-f]{64}$/u);
     expect(createActiveAgentProfileDescriptor({ ...baseAgent, command: "other-agent" }).revision).not.toBe(first.revision);
     expect(createActiveAgentProfileDescriptor({ ...baseAgent, dir: "/other/state" }).revision).not.toBe(first.revision);
-    expect(createActiveAgentProfileDescriptor({ ...baseAgent, sessionDirEnvKeys: ["OTHER_SESSION_DIR"] }).revision).not.toBe(first.revision);
+    expect(createActiveAgentProfileDescriptor({ ...baseAgent, sessionDirEnvKeys: ["PI_WEB_AGENT_SESSION_DIR", "PI_CODING_AGENT_SESSION_DIR"] }).revision).not.toBe(first.revision);
   });
 
   it("takes an immutable snapshot for the session daemon profile epoch", () => {
@@ -30,6 +30,12 @@ describe("active agent profile descriptor", () => {
     expect(profile.sessionDirEnvKeys).toEqual(["PI_WEB_AGENT_SESSION_DIR"]);
     expect(Reflect.set(profile, "command", "mutated-agent")).toBe(false);
     expect(Reflect.set(profile.sessionDirEnvKeys, "0", "MUTATED_SESSION_DIR")).toBe(false);
+  });
+
+  it("rejects profile fields outside the host and explicit environment policy", () => {
+    expect(() => createActiveAgentProfileDescriptor({ ...baseAgent, command: "./acme-agent" })).toThrow("must be valid for this host");
+    expect(() => createActiveAgentProfileDescriptor({ ...baseAgent, dir: "relative/state" })).toThrow("must be valid for this host");
+    expect(() => createActiveAgentProfileDescriptor({ ...baseAgent, sessionDirEnvKeys: ["ARBITRARY_AGENT_SESSION_DIR"] })).toThrow("explicit PI WEB policy");
   });
 
   it("copies only the secret-free descriptor fields", () => {

@@ -80,6 +80,9 @@ describe("PI WEB status parsing", () => {
     });
 
     expect(parsePiWebRuntimeResponse(responseFor(undefined, { ...profile, token: "secret" }))).toBeUndefined();
+    expect(parsePiWebRuntimeResponse(responseFor(undefined, { ...profile, command: "./acme-agent" }))).toBeUndefined();
+    expect(parsePiWebRuntimeResponse(responseFor(undefined, { ...profile, dir: "relative/state" }))).toBeUndefined();
+    expect(parsePiWebRuntimeResponse(responseFor(undefined, { ...profile, sessionDirEnvKeys: ["ARBITRARY_AGENT_SESSION_DIR"] }))).toBeUndefined();
     expect(parsePiWebRuntimeResponse(responseFor(profile, undefined))).toBeUndefined();
   });
 

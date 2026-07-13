@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { hasAgentDirEnvOverride, hasAgentSessionDirEnvOverride, loadPiWebConfig, parseUploadsConfig, resolveEffectivePiWebConfig, savePiWebConfig, type LoadOptions, type PiWebConfig } from "../config.js";
+import { hasAgentDirEnvOverride, hasAgentSessionDirEnvOverride, loadPiWebConfig, parseAgentConfig, parseUploadsConfig, resolveEffectivePiWebConfig, savePiWebConfig, type AgentPathHost, type LoadOptions, type PiWebConfig } from "../config.js";
 import type { PiWebConfigEnvOverrides, PiWebConfigResponse, PiWebConfigValues } from "../shared/apiTypes.js";
 import { isPiWebPluginId } from "../shared/pluginIds.js";
 
@@ -83,13 +83,13 @@ export function registerLocalMachineConfigRoutes(app: FastifyInstance, service: 
   });
 }
 
-export function parseSelectedMachineConfigRequest(value: unknown): PiWebConfig {
+export function parseSelectedMachineConfigRequest(value: unknown, agentPathHost: AgentPathHost = "current"): PiWebConfig {
   if (!isRecord(value)) throw new Error("PI WEB selected-machine config update must include a config object");
   for (const key of Object.keys(value)) {
     if (!SELECTED_MACHINE_CONFIG_KEY_SET.has(key)) throw new Error(`PI WEB selected-machine config key is not allowed: ${key}`);
   }
   try {
-    return pickSelectedMachineConfig(parseConfigRequest(value));
+    return pickSelectedMachineConfig(parseConfigRequest(value, agentPathHost));
   } catch (error) {
     throw new Error(selectedMachineConfigErrorMessage(error), { cause: error });
   }
@@ -112,13 +112,13 @@ export function parsePiWebConfigResponseBody(value: unknown, source = "PI WEB co
   return {
     path: requireResponseString(record, "path", source),
     exists: requireResponseBoolean(record, "exists", source),
-    config: parseConfigRequest(record["config"]),
-    effectiveConfig: parseConfigRequest(record["effectiveConfig"]),
+    config: parseConfigRequest(record["config"], "portable"),
+    effectiveConfig: parseConfigRequest(record["effectiveConfig"], "portable"),
     envOverrides: parsePiWebConfigEnvOverridesResponse(record["envOverrides"], source),
   };
 }
 
-function parseConfigRequest(value: unknown): PiWebConfig {
+function parseConfigRequest(value: unknown, agentPathHost: AgentPathHost = "current"): PiWebConfig {
   if (!isRecord(value)) throw new Error("PI WEB config update must include a config object");
   const config: PiWebConfig = {};
   const host = value["host"];
@@ -154,7 +154,7 @@ function parseConfigRequest(value: unknown): PiWebConfig {
     if (typeof subsessions !== "boolean") throw new Error("PI WEB config subsessions must be a boolean");
     config.subsessions = subsessions;
   }
-  if (agent !== undefined) config.agent = parseAgentRequest(agent);
+  if (agent !== undefined) config.agent = parseAgentRequest(agent, agentPathHost);
   return config;
 }
 
@@ -216,28 +216,8 @@ function parseMaxUploadBytesRequest(value: unknown): number {
   return value;
 }
 
-function parseAgentRequest(value: unknown): NonNullable<PiWebConfig["agent"]> {
-  if (!isRecord(value)) throw new Error("PI WEB config agent must be an object");
-  const command = value["command"];
-  const dir = value["dir"];
-  return {
-    ...(command === undefined ? {} : { command: parseAgentCommandRequest(command) }),
-    ...(dir === undefined ? {} : { dir: parseAgentDirRequest(dir) }),
-  };
-}
-
-function parseAgentCommandRequest(value: unknown): string {
-  if (typeof value !== "string" || value.trim() === "") throw new Error("PI WEB config agent.command must be a non-empty string");
-  const command = value.trim();
-  if (/[\s;&|`$<>]/u.test(command)) throw new Error("PI WEB config agent.command must be a single command name or path without shell metacharacters");
-  return command;
-}
-
-function parseAgentDirRequest(value: unknown): string {
-  if (typeof value !== "string" || value.trim() === "") throw new Error("PI WEB config agent.dir must be a non-empty string");
-  const dir = value.trim();
-  if (!isAbsoluteOrHomePath(dir)) throw new Error("PI WEB config agent.dir must be an absolute path or start with ~");
-  return dir;
+function parseAgentRequest(value: unknown, pathHost: AgentPathHost): NonNullable<PiWebConfig["agent"]> {
+  return parseAgentConfig(value, "request", pathHost);
 }
 
 function parsePluginsRequest(value: unknown): NonNullable<PiWebConfig["plugins"]> {
@@ -315,10 +295,6 @@ function isConfigValidationError(error: unknown): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function isAbsoluteOrHomePath(value: string): boolean {
-  return value === "~" || value.startsWith("~/") || value.startsWith("~\\") || value.startsWith("/") || value.startsWith("\\") || /^[A-Za-z]:[\\/]/u.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

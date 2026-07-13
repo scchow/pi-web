@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import type { PiWebConfigValues } from "./shared/apiTypes.js";
 import { isPiWebPluginId, piWebPluginIdPattern } from "./shared/pluginIds.js";
 
@@ -59,12 +59,12 @@ export interface EffectivePiWebAgentConfig {
   sessionDirEnvKeys: string[];
 }
 
-export function effectiveAgentConfig(env: NodeJS.ProcessEnv = process.env, config: Pick<PiWebConfig, "agent"> = {}, cwd = process.cwd()): EffectivePiWebAgentConfig {
-  const command = parseAgentCommand(envValue(env, PI_WEB_AGENT_COMMAND_ENV) ?? config.agent?.command ?? DEFAULT_AGENT_COMMAND, "agent.command", "environment");
-  const configuredDir = envValue(env, PI_WEB_AGENT_DIR_ENV) ?? (isPiCommand(command) ? envValue(env, PI_CODING_AGENT_DIR_ENV) : undefined) ?? config.agent?.dir ?? defaultAgentDirForCommand(command, env);
+export function effectiveAgentConfig(env: NodeJS.ProcessEnv = process.env, config: Pick<PiWebConfig, "agent"> = {}): EffectivePiWebAgentConfig {
+  const command = parseAgentCommand(envValue(env, PI_WEB_AGENT_COMMAND_ENV) ?? config.agent?.command ?? DEFAULT_AGENT_COMMAND, "agent.command", "environment", "current");
+  const configuredDir = envValue(env, PI_WEB_AGENT_DIR_ENV) ?? (usesDefaultPiStatePolicy(command) ? envValue(env, PI_CODING_AGENT_DIR_ENV) : undefined) ?? config.agent?.dir ?? defaultAgentDirForCommand(command, env);
   return {
     command,
-    dir: resolveAgentDirPath(configuredDir, env, cwd, "agent.dir", "environment"),
+    dir: resolveAgentDirPath(configuredDir, env, "agent.dir", "environment"),
     sessionDirEnvKeys: agentSessionDirEnvKeys(command),
   };
 }
@@ -72,12 +72,12 @@ export function effectiveAgentConfig(env: NodeJS.ProcessEnv = process.env, confi
 export function agentSessionDirEnvKeys(command = DEFAULT_AGENT_COMMAND): string[] {
   return uniqueStrings([
     PI_WEB_AGENT_SESSION_DIR_ENV,
-    ...(isPiCommand(command) ? [PI_CODING_AGENT_SESSION_DIR_ENV] : []),
+    ...(usesDefaultPiStatePolicy(command) ? [PI_CODING_AGENT_SESSION_DIR_ENV] : []),
   ]);
 }
 
 export function hasAgentDirEnvOverride(env: NodeJS.ProcessEnv, command = DEFAULT_AGENT_COMMAND): boolean {
-  return isEnvSet(env[PI_WEB_AGENT_DIR_ENV]) || (isPiCommand(command) && isEnvSet(env[PI_CODING_AGENT_DIR_ENV]));
+  return isEnvSet(env[PI_WEB_AGENT_DIR_ENV]) || (usesDefaultPiStatePolicy(command) && isEnvSet(env[PI_CODING_AGENT_DIR_ENV]));
 }
 
 export function hasAgentSessionDirEnvOverride(env: NodeJS.ProcessEnv, command = DEFAULT_AGENT_COMMAND): boolean {
@@ -131,7 +131,7 @@ export function resolveEffectivePiWebConfig(loaded: LoadedPiWebConfig, options: 
   const port = env["PI_WEB_PORT"] ?? env["PORT"];
   const allowedHosts = env["PI_WEB_ALLOWED_HOSTS"];
   const maxUpload = env["PI_WEB_MAX_UPLOAD_BYTES"];
-  const agent = effectiveAgentConfig(env, loaded.config, options.cwd ?? process.cwd());
+  const agent = effectiveAgentConfig(env, loaded.config);
   return {
     ...loaded,
     config: {
@@ -155,8 +155,9 @@ export function savePiWebConfig(config: PiWebConfig, options: LoadOptions = {}):
   const env = options.env ?? process.env;
   const path = piWebConfigPath(env, options.cwd ?? process.cwd());
   const normalized = parsePiWebConfig(piWebConfigRecord(config), path);
-  effectiveAgentConfig(env, normalized, options.cwd ?? process.cwd());
+  effectiveAgentConfig(env, normalized);
   const existing = readExistingConfigObject(path);
+  if (existing["agent"] !== undefined) parseAgentConfig(existing["agent"], path);
   delete existing["host"];
   delete existing["port"];
   delete existing["allowedHosts"];
@@ -260,33 +261,72 @@ function parseString(value: unknown, key: string, path: string): string {
   return value;
 }
 
-function parseAgentConfig(value: unknown, path: string): NonNullable<PiWebConfig["agent"]> {
+const AGENT_CONFIG_KEYS = new Set(["command", "dir"]);
+const SAFE_BARE_AGENT_COMMAND_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._+-]*$/u;
+
+export type AgentPathHost = "current" | "portable";
+
+export function parseAgentConfig(value: unknown, path: string, pathHost: AgentPathHost = "current"): NonNullable<PiWebConfig["agent"]> {
   if (!isRecord(value)) throw new Error(`PI WEB config agent must be an object: ${path}`);
+  const unknownKey = Object.keys(value).find((key) => !AGENT_CONFIG_KEYS.has(key));
+  if (unknownKey !== undefined) throw new Error(`PI WEB config agent contains unknown key ${JSON.stringify(unknownKey)}: ${path}`);
   const command = value["command"];
   const dir = value["dir"];
   return {
-    ...(command !== undefined ? { command: parseAgentCommand(command, "agent.command", path) } : {}),
-    ...(dir !== undefined ? { dir: parseAgentDir(dir, "agent.dir", path) } : {}),
+    ...(command !== undefined ? { command: parseAgentCommand(command, "agent.command", path, pathHost) } : {}),
+    ...(dir !== undefined ? { dir: parseAgentDir(dir, "agent.dir", path, pathHost) } : {}),
   };
 }
 
-function parseAgentCommand(value: unknown, key: string, path: string): string {
+function parseAgentCommand(value: unknown, key: string, path: string, pathHost: AgentPathHost): string {
   const command = parseString(value, key, path).trim();
-  if (command === "") throw new Error(`PI WEB config ${key} must be a non-empty string: ${path}`);
-  if (/[\s;&|`$<>]/u.test(command)) throw new Error(`PI WEB config ${key} must be a single command name or path without shell metacharacters: ${path}`);
+  if (!isSafeAgentCommand(command, pathHost)) {
+    const absoluteLabel = pathHost === "current" ? "host-absolute" : "absolute";
+    throw new Error(`PI WEB config ${key} must be a safe bare executable name or ${absoluteLabel} executable path: ${path}`);
+  }
   return command;
 }
 
-function parseAgentDir(value: unknown, key: string, path: string): string {
-  const dir = parseString(value, key, path);
-  if (!isAbsoluteOrHomePath(dir)) throw new Error(`PI WEB config ${key} must be an absolute path or start with ~: ${path}`);
+function parseAgentDir(value: unknown, key: string, path: string, pathHost: AgentPathHost): string {
+  const dir = parseString(value, key, path).trim();
+  const isAbsoluteDir = pathHost === "current" ? isHostAbsoluteAgentDir(dir) : isPortableAbsoluteAgentPath(dir);
+  if (!isAbsoluteDir && !isHomePath(dir, pathHost)) {
+    const absoluteLabel = pathHost === "current" ? "a host-absolute" : "an absolute";
+    throw new Error(`PI WEB config ${key} must be ${absoluteLabel} path or start with ~: ${path}`);
+  }
   return dir;
 }
 
-function resolveAgentDirPath(value: string, env: NodeJS.ProcessEnv, cwd: string, key: string, path: string): string {
-  const parsed = parseAgentDir(value, key, path);
+function resolveAgentDirPath(value: string, env: NodeJS.ProcessEnv, key: string, path: string): string {
+  const parsed = parseAgentDir(value, key, path, "current");
   const expanded = expandHomePath(parsed, env);
-  return isAbsoluteLike(expanded) ? expanded : resolve(cwd, expanded);
+  if (!isHostAbsoluteAgentDir(expanded)) {
+    throw new Error(`PI WEB config ${key} must resolve to a host-absolute path: ${path}`);
+  }
+  return normalize(expanded);
+}
+
+export function isSafeAgentCommandForHost(value: string): boolean {
+  return isSafeAgentCommand(value, "current");
+}
+
+function isSafeAgentCommand(value: string, pathHost: AgentPathHost): boolean {
+  if (value === "" || value !== value.trim() || value.includes("\0") || /[\s;&|`$<>]/u.test(value)) return false;
+  if (SAFE_BARE_AGENT_COMMAND_PATTERN.test(value)) return true;
+  if (pathHost === "current") return isAbsolute(value) && basename(value) !== "";
+  return isAbsoluteLike(value) && value.split(/[\\/]/u).at(-1) !== "";
+}
+
+export function isHostAbsoluteAgentDir(value: string): boolean {
+  return isSafeAgentDirPath(value) && isAbsolute(value);
+}
+
+function isPortableAbsoluteAgentPath(value: string): boolean {
+  return isSafeAgentDirPath(value) && isAbsoluteLike(value);
+}
+
+function isSafeAgentDirPath(value: string): boolean {
+  return value !== "" && value === value.trim() && !hasControlCharacter(value);
 }
 
 function parsePort(value: unknown, key: string, path = "environment"): number {
@@ -339,23 +379,27 @@ function parseWorkspaceRelativeFolder(value: unknown, key: string, path: string)
 }
 
 
-function isAbsoluteOrHomePath(value: string): boolean {
-  return value === "~" || value.startsWith("~/") || value.startsWith("~\\") || isAbsoluteLike(value);
+function isHomePath(value: string, pathHost: AgentPathHost): boolean {
+  return value === "~" || value.startsWith("~/") || ((pathHost === "portable" || process.platform === "win32") && value.startsWith("~\\"));
 }
 
 function expandHomePath(value: string, env: NodeJS.ProcessEnv): string {
   const home = env["HOME"] !== undefined && env["HOME"] !== "" ? env["HOME"] : homedir();
   if (value === "~") return home;
-  if (value.startsWith("~/") || value.startsWith("~\\")) return join(home, value.slice(2));
+  if (value.startsWith("~/") || (process.platform === "win32" && value.startsWith("~\\"))) return join(home, value.slice(2));
   return value;
 }
 
 function defaultAgentDirForCommand(command: string, env: NodeJS.ProcessEnv): string {
-  if (isPiCommand(command)) return expandHomePath("~/.pi/agent", env);
+  if (usesDefaultPiStatePolicy(command)) return expandHomePath("~/.pi/agent", env);
   throw new Error(`PI WEB config agent.dir or ${PI_WEB_AGENT_DIR_ENV} is required when agent.command is ${JSON.stringify(command)}`);
 }
 
-function isPiCommand(command: string): boolean {
+function usesDefaultPiStatePolicy(command: string): boolean {
+  return !command.includes("/") && !command.includes("\\") && isPiCompanionCommand(command);
+}
+
+export function isPiCompanionCommand(command: string): boolean {
   const name = command.split(/[\\/]/u).at(-1)?.toLowerCase() ?? command.toLowerCase();
   return name.replace(/(?:\.[cm]?js|\.exe|\.cmd)$/iu, "") === DEFAULT_AGENT_COMMAND;
 }
@@ -372,6 +416,15 @@ function isEnvSet(value: string | undefined): boolean {
 function uniqueStrings(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
+
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code < 32 || code === 127) return true;
+  }
+  return false;
+}
+
 function isAbsoluteLike(value: string): boolean {
   const withForwardSlashes = value.replace(/\\/g, "/");
   return isAbsolute(value) || withForwardSlashes.startsWith("/") || /^[A-Za-z]:\//.test(withForwardSlashes);

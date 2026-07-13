@@ -9,6 +9,8 @@ import type { SessionRouteLookup, SessionRouteService } from "./sessionService.j
 import { registerSessionRoutes } from "./sessionRoutes.js";
 import type { NormalizedSessionCleanupRequest } from "./sessionCleanup.js";
 
+const TEST_AGENT_DIR = "/tmp/pi-web-test-agent";
+
 let app: FastifyInstance;
 let service: PiSessionService;
 let sessionManager: RejectingSessionManager;
@@ -18,7 +20,7 @@ beforeEach(async () => {
   await app.register(fastifyWebsocket);
   sessionManager = new RejectingSessionManager();
   const eventHub = new SessionEventHub();
-  service = new PiSessionService(eventHub, { sessionManager, heartbeatIntervalMs: 60_000 });
+  service = new PiSessionService(eventHub, { agentDir: TEST_AGENT_DIR, sessionManager, heartbeatIntervalMs: 60_000 });
   registerSessionRoutes(app, service, eventHub);
 });
 
