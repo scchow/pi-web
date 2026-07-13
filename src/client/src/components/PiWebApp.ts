@@ -1,6 +1,6 @@
 import { LitElement, html } from "lit";
 import { customElement, query, state } from "lit/decorators.js";
-import { configApi, effectiveWorkspaceUploadFolder, piWebApi, sessionsApi, terminalsApi, workspacesApi, workspaceEffectiveUploadFolder, type Machine, type MachineHealth, type PiWebConfigValues, type PiWebShortcutConfig, type Project, type RealtimeEvent, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupRequest, type SessionInfo, type TerminalCommandRun, type TerminalUiEvent, type Workspace } from "../api";
+import { configApi, effectiveWorkspaceUploadFolder, sessionsApi, terminalsApi, workspacesApi, workspaceEffectiveUploadFolder, type Machine, type MachineHealth, type PiWebConfigValues, type PiWebShortcutConfig, type Project, type RealtimeEvent, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupRequest, type SessionInfo, type TerminalCommandRun, type TerminalUiEvent, type Workspace } from "../api";
 import type { AppAction } from "../actions";
 import { initialAppState, type AppState } from "../appState";
 import { isSessionActive } from "../../../shared/activity";
@@ -11,6 +11,7 @@ import { FileExplorerController } from "../controllers/fileExplorerController";
 import { GitController } from "../controllers/gitController";
 import { MachineController } from "../controllers/machineController";
 import { ProjectController } from "../controllers/projectController";
+import { PiWebStatusController } from "../controllers/piWebStatusController";
 import { SessionController } from "../controllers/sessionController";
 import { WorkspaceController, canDeleteWorkspace } from "../controllers/workspaceController";
 import { emptyMachineNavigationSnapshot, machineNavigationSnapshotFromState, routeFromMachineNavigationSnapshot, SessionStorageMachineNavigationMemory, type MachineNavigationSnapshot, type WorkspaceRouteSurface } from "../controllers/machineNavigationMemory";
@@ -131,6 +132,11 @@ export class PiWebApp extends LitElement {
     (patch) => { this.setState(patch); },
     () => { this.updateUrl(); },
     this.projects,
+  );
+  private readonly piWebStatusController = new PiWebStatusController(
+    () => this.state,
+    (patch) => { this.setState(patch); },
+    { onRefreshError: (machineId, error) => { console.warn(`Failed to refresh PI WEB status for ${machineId}`, error); } },
   );
   private readonly files = new FileExplorerController(
     () => this.state,
@@ -298,7 +304,7 @@ export class PiWebApp extends LitElement {
     this.clearScheduledPiWebStatusRefresh();
     this.piWebStatusDeferredTimer = window.setTimeout(() => {
       this.piWebStatusDeferredTimer = undefined;
-      void this.refreshPiWebStatus();
+      void this.piWebStatusController.refresh();
     }, delayMs);
   }
 
@@ -306,17 +312,6 @@ export class PiWebApp extends LitElement {
     if (this.piWebStatusDeferredTimer === undefined) return;
     window.clearTimeout(this.piWebStatusDeferredTimer);
     this.piWebStatusDeferredTimer = undefined;
-  }
-
-  private async refreshPiWebStatus(): Promise<void> {
-    const machineId = selectedMachineId(this.state);
-    try {
-      const piWebStatus = await piWebApi.piWebStatus(machineId);
-      if (selectedMachineId(this.state) === machineId) this.setState({ piWebStatus });
-    } catch (error) {
-      if (selectedMachineId(this.state) === machineId) this.setState({ piWebStatus: undefined });
-      console.warn(`Failed to refresh PI WEB status for ${machineId}`, error);
-    }
   }
 
   private async refreshWorkspaceActivity(machineId = selectedMachineId(this.state)): Promise<void> {
@@ -1573,6 +1568,7 @@ export class PiWebApp extends LitElement {
       refreshFiles: () => this.files.refreshFiles(),
       refreshGit: () => this.git.refreshGit(),
       refreshAppData: () => this.refreshAppData(),
+      checkForPiWebUpdates: () => this.piWebStatusController.checkForUpdates(),
       reloadPage: () => { this.hardReloadApp(); },
       deleteWorkspace: (workspace) => this.deleteWorkspace(workspace),
       startSession: () => this.withChatScrollTransition(() => this.startSessionAndOpenChat()),

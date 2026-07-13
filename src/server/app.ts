@@ -23,7 +23,7 @@ import { createFilePiWebConfigService, registerConfigRoutes, registerLocalMachin
 import { PiWebPluginService } from "./piWebPluginService.js";
 import { createDefaultPiPackageService, type PiPackageService } from "./piPackageService.js";
 import { registerPiPackageRoutes } from "./piPackageRoutes.js";
-import { createPiWebStatusCache } from "./piWebStatusCache.js";
+import { createPiWebStatusCache, type PiWebStatusCache } from "./piWebStatusCache.js";
 import { getPiWebRuntime, getPiWebStatus, getPiWebVersionStatus } from "./piWebStatus.js";
 import { MachineService } from "./machines/machineService.js";
 import { registerMachineRoutes } from "./machines/machineRoutes.js";
@@ -38,6 +38,7 @@ export interface AppDependencies {
   sessionDaemon?: SessionProxyDaemon;
   piWebPlugins?: Pick<PiWebPluginService, "manifest" | "plugins" | "readAsset">;
   piPackages?: PiPackageService;
+  piWebStatusCache?: PiWebStatusCache;
   config?: PiWebConfigService;
   clientDist?: string | false;
   logger?: FastifyServerOptions["logger"];
@@ -136,9 +137,10 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   const piPackages = deps.piPackages ?? createDefaultPiPackageService();
   const configService = deps.config ?? createFilePiWebConfigService();
   const sessionDaemon = deps.sessionDaemon ?? new SessionDaemonClient();
-  const piWebStatusCache = createPiWebStatusCache(() => getPiWebStatus(sessionDaemon), {
-    onError: (error) => { app.log.warn({ err: error }, "failed to refresh PI WEB status cache"); },
-  });
+  const piWebStatusCache = deps.piWebStatusCache ?? createPiWebStatusCache(
+    ({ force }) => getPiWebStatus(sessionDaemon, { forceReleaseCheck: force }),
+    { onError: (error) => { app.log.warn({ err: error }, "failed to refresh PI WEB status cache"); } },
+  );
   const machines = deps.machines ?? new MachineService(undefined, {
     localRuntime: () => getPiWebRuntime(sessionDaemon),
   });
@@ -153,7 +155,9 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
     return reply.type(asset.contentType).send(asset.content);
   });
 
-  app.get("/api/pi-web/status", async () => piWebStatusCache.get());
+  app.get<{ Querystring: { refresh?: string } }>("/api/pi-web/status", async (request) => request.query.refresh === "1"
+    ? piWebStatusCache.refresh({ force: true })
+    : piWebStatusCache.get());
   app.get("/api/pi-web/version", async () => getPiWebVersionStatus(sessionDaemon));
   app.get("/api/pi-web/runtime", async () => getPiWebRuntime(sessionDaemon));
   app.get("/api/plugins", async () => piWebPlugins.plugins());
