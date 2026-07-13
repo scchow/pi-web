@@ -84,7 +84,7 @@ describe("installed native-service mode and definition inspection", () => {
     expect(inferInstalledNativeServiceMode(new Set(["sessiond"]))).toBe("ambiguous");
   });
 
-  it.each(["systemd", "launchd"] as const)("reconstructs an exact installed development input from %s definitions", (kind) => {
+  it.each(["systemd", "launchd"] as const)("reconstructs POSIX development paths from %s definitions on every host", (kind) => {
     const plan = developmentPlan(kind);
     expect(inspectInstalledDevelopmentServiceInput(plan.backend, renderedDefinitions(plan))).toEqual({
       ok: true,
@@ -122,6 +122,19 @@ describe("installed native-service mode and definition inspection", () => {
         packageJsonPath: "/checkout %h\nnext/package.json",
       },
     });
+  });
+
+  it("interprets installed shell executable paths with POSIX semantics", () => {
+    const plan = developmentPlan("systemd");
+    const definitions = renderedDefinitions(plan).map((definition) => ({
+      ...definition,
+      contents: definition.contents.replace('"/bin/zsh"', '"/bin/not-zsh\\\\zsh"'),
+    }));
+
+    const inspection = inspectInstalledDevelopmentServiceInput(plan.backend, definitions);
+    expect(inspection.ok).toBe(false);
+    if (inspection.ok) throw new Error("Expected the POSIX shell basename inspection to fail");
+    expect(inspection.message).toContain("unsupported login shell");
   });
 
   it("inspects legacy systemd definitions without /usr/bin/env or quoted working directories", () => {

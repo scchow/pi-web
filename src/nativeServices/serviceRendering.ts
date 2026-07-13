@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { posix as posixPath } from "node:path";
 import type {
   NativeServiceId,
   NativeServicePlan,
@@ -42,7 +42,7 @@ export function renderLaunchdPlist(
   const keepAlive = service.restart === "on-failure"
     ? "  <key>KeepAlive</key>\n  <dict>\n    <key>SuccessfulExit</key>\n    <false/>\n  </dict>\n"
     : "";
-  const logPath = join(logDirectory, service.manager.logName);
+  const logPath = posixPath.join(logDirectory, service.manager.logName);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

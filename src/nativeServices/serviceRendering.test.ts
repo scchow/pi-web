@@ -70,7 +70,8 @@ describe("native service rendering", () => {
     expect(plist).toContain("<string>exec npm run start:sessiond</string>");
     expect(plist).toContain("<key>WorkingDirectory</key>\n  <string>/checkout with space</string>");
     expect(plist).toContain("<key>PI_WEB_CONFIG</key>\n    <string>/home/user/config with &quot;quote&quot;.json</string>");
-    expect(plist).toContain("<string>/logs/sessiond.log</string>");
+    expect(plist.match(/<string>\/logs\/sessiond\.log<\/string>/gu)).toHaveLength(2);
+    expect(plist).not.toContain("<string>\\logs\\sessiond.log</string>");
     expect(plist).not.toContain("<key>KeepAlive</key>");
   });
 

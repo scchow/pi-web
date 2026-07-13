@@ -1,4 +1,4 @@
-import { basename, join } from "node:path";
+import { posix as posixPath } from "node:path";
 import {
   createDevelopmentNativeServicePlan,
   nativeServicePrerequisiteNeedsPathAdvice,
@@ -135,7 +135,7 @@ export function inspectInstalledDevelopmentServiceInput(
     shell: first.shell,
     environment: first.environment,
     workingDirectory: first.workingDirectory,
-    packageJsonPath: join(first.workingDirectory, "package.json"),
+    packageJsonPath: posixPath.join(first.workingDirectory, "package.json"),
   };
   const expectedPlan = createDevelopmentNativeServicePlan(input);
   for (const definition of parsed.value) {
@@ -436,7 +436,7 @@ function parseLaunchdDefinition(
 }
 
 function installedShell(executable: string): InstalledNativeServiceInspection<NativeServiceShell> {
-  const name = basename(executable).replace(/^-/, "");
+  const name = posixPath.basename(executable).replace(/^-/, "");
   if (name !== "bash" && name !== "zsh" && name !== "fish") {
     return { ok: false, message: `Installed service definition uses unsupported login shell ${executable}.` };
   }
