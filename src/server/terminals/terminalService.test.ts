@@ -22,6 +22,24 @@ describe.skipIf(process.platform === "win32")("TerminalService command runs", ()
     }
   });
 
+  it("sets IS_PIWEB for terminal commands", async () => {
+    const service = new TerminalService();
+    try {
+      const run = service.runCommand({
+        origin: "core",
+        projectId: "p1",
+        workspaceId: "w1",
+        cwd: process.cwd(),
+        title: "Environment check",
+        command: "printf '%s' \"$IS_PIWEB\"",
+      });
+
+      expect(await terminalExit(service, run.terminalId)).toContain("1");
+    } finally {
+      service.dispose();
+    }
+  });
+
   it("tracks dedicated terminal command runs through completion", async () => {
     const service = new TerminalService();
     try {
