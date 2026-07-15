@@ -41,6 +41,12 @@ export const FEDERATED_HTTP_ROUTES = [
   { method: "GET", path: "/terminal-command-runs" },
   { method: "GET", path: "/terminal-command-runs/:runId" },
   { method: "POST", path: "/terminal-command-runs/:runId/cancel" },
+  // Machine-level terminals (no workspace required)
+  { method: "GET", path: "/machines/local/terminals" },
+  { method: "POST", path: "/machines/local/terminals" },
+  { method: "DELETE", path: "/machines/local/terminals" },
+  { method: "DELETE", path: "/machines/local/terminals/:terminalId" },
+  { method: "POST", path: "/machines/local/terminals/:terminalId/continue" },
   { method: "GET", path: "/files" },
   { method: "GET", path: "/activity" },
   { method: "GET", path: "/sessions" },
@@ -86,4 +92,5 @@ export const FEDERATED_WEBSOCKET_ROUTES = [
   "/sessions/events",
   "/sessions/:sessionId/events",
   "/projects/:projectId/workspaces/:workspaceId/terminals/:terminalId/socket",
+  "/machines/local/terminals/:terminalId/socket",
 ] as const satisfies readonly string[];

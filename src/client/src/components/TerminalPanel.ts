@@ -4,7 +4,7 @@ import { styleMap, type StyleInfo } from "lit/directives/style-map.js";
 import { Terminal, type ITerminalOptions, type ITheme } from "@xterm/xterm";
 import { FitAddon, type ITerminalDimensions } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { terminalSocket, terminalsApi, type TerminalCommandRun, type TerminalInfo, type Workspace } from "../api";
+import { machineTerminalSocket, machineTerminalsApi, terminalSocket, terminalsApi, type TerminalCommandRun, type TerminalInfo, type Workspace } from "../api";
 import { writeClipboardText } from "../clipboard";
 import { selectFallbackTerminal, selectPreferredTerminal } from "../controllers/terminalSelection";
 import { createTerminalCopySnapshot, DEFAULT_TERMINAL_ANSI_THEME, type TerminalCopyRunStyle, type TerminalCopySnapshot } from "../terminalCopySnapshot";
@@ -101,7 +101,7 @@ export class TerminalPanel extends LitElement {
   }
 
   override willUpdate(changed: PropertyValues<this>): void {
-    const workspaceScope = this.workspace === undefined ? undefined : JSON.stringify([this.machineId, this.workspace.path]);
+    const workspaceScope = this.workspace === undefined ? `machine:${this.machineId}` : JSON.stringify([this.machineId, this.workspace.path]);
     if (workspaceScope !== this.observedWorkspaceScope) {
       this.observedWorkspaceScope = workspaceScope;
       this.loadedCwd = undefined;
@@ -135,9 +135,16 @@ export class TerminalPanel extends LitElement {
   }
 
   private loadVisibleWorkspaceTerminals(): void {
+    if (!this.visible) return;
     const cwd = this.workspace?.path;
-    if (!this.visible || cwd === undefined || cwd === this.loadedCwd) return;
-    this.loadedCwd = cwd;
+    if (cwd !== undefined) {
+      if (cwd === this.loadedCwd) return;
+      this.loadedCwd = cwd;
+    } else if (this.loadedCwd !== "machine") {
+      this.loadedCwd = "machine";
+    } else {
+      return;
+    }
     void this.loadTerminals();
   }
 
@@ -146,12 +153,18 @@ export class TerminalPanel extends LitElement {
     this.error = undefined;
     try {
       const workspace = this.workspace;
-      if (workspace === undefined) return;
       const shouldAutoStart = this.consumeAutoStart();
-      const [terminals, commandRuns] = await Promise.all([
-        terminalsApi.terminals(workspace.projectId, workspace.id, this.machineId),
-        terminalsApi.listCommandRuns({ projectId: workspace.projectId, workspaceId: workspace.id }, this.machineId),
-      ]);
+      let terminals: TerminalInfo[];
+      let commandRuns: TerminalCommandRun[];
+      if (workspace === undefined) {
+        terminals = await machineTerminalsApi.terminals(this.machineId);
+        commandRuns = await terminalsApi.listCommandRuns(undefined, this.machineId);
+      } else {
+        [terminals, commandRuns] = await Promise.all([
+          terminalsApi.terminals(workspace.projectId, workspace.id, this.machineId),
+          terminalsApi.listCommandRuns({ projectId: workspace.projectId, workspaceId: workspace.id }, this.machineId),
+        ]);
+      }
       this.terminals = terminals;
       this.commandRuns = commandRuns;
       this.selectPreferredLoadedTerminal({ replaceUrl: true });
@@ -170,16 +183,15 @@ export class TerminalPanel extends LitElement {
   }
 
   private consumeAutoStart(): boolean {
-    const cwd = this.workspace?.path;
-    if (!this.autoStart || cwd === undefined || this.autoStartConsumedCwd === cwd) return false;
+    const cwd = this.workspace?.path ?? "machine";
+    if (!this.autoStart || this.autoStartConsumedCwd === cwd) return false;
     this.autoStartConsumedCwd = cwd;
     return true;
   }
 
   private shouldReloadForRequestedTerminal(): boolean {
-    const cwd = this.workspace?.path;
+    const cwd = this.workspace?.path ?? "machine";
     return this.visible
-      && cwd !== undefined
       && cwd === this.loadedCwd
       && this.selectedTerminalId !== undefined
       && !this.loading
@@ -202,11 +214,12 @@ export class TerminalPanel extends LitElement {
   }
 
   private async startTerminal(): Promise<void> {
-    if (this.workspace === undefined) return;
     this.error = undefined;
     try {
       const size = this.measureTerminalSize() ?? DEFAULT_TERMINAL_SIZE;
-      const terminal = await terminalsApi.startTerminal(this.workspace.projectId, this.workspace.id, size, this.machineId);
+      const terminal = this.workspace === undefined
+        ? await machineTerminalsApi.startTerminal(size, this.machineId)
+        : await terminalsApi.startTerminal(this.workspace.projectId, this.workspace.id, size, this.machineId);
       this.terminals = [...this.terminals, terminal];
       this.selectTerminal(terminal.id);
     } catch (error) {
@@ -217,8 +230,11 @@ export class TerminalPanel extends LitElement {
   private async closeTerminal(id: string, event: Event): Promise<void> {
     event.stopPropagation();
     try {
-      if (this.workspace === undefined) return;
-      await terminalsApi.closeTerminal(this.workspace.projectId, this.workspace.id, id, this.machineId);
+      if (this.workspace === undefined) {
+        await machineTerminalsApi.closeTerminal(id, this.machineId);
+      } else {
+        await terminalsApi.closeTerminal(this.workspace.projectId, this.workspace.id, id, this.machineId);
+      }
       const next = this.terminals.filter((terminal) => terminal.id !== id);
       this.terminals = next;
       if (this.selectedId === id || this.selectedTerminalId === id) {
@@ -247,10 +263,10 @@ export class TerminalPanel extends LitElement {
   }
 
   private async loadCommandRuns(): Promise<void> {
-    const workspace = this.workspace;
-    if (workspace === undefined) return;
     try {
-      const commandRuns = await terminalsApi.listCommandRuns({ projectId: workspace.projectId, workspaceId: workspace.id }, this.machineId);
+      const commandRuns = this.workspace === undefined
+        ? await terminalsApi.listCommandRuns(undefined, this.machineId)
+        : await terminalsApi.listCommandRuns({ projectId: this.workspace.projectId, workspaceId: this.workspace.id }, this.machineId);
       this.commandRuns = commandRuns;
       this.cancellingRunIds = this.cancellingRunIds.filter((runId) => commandRuns.some((run) => run.id === runId && isCommandRunPending(run)));
       this.updateCommandRunPolling(this.hasPendingCommandRuns(commandRuns));
@@ -289,11 +305,13 @@ export class TerminalPanel extends LitElement {
   }
 
   private async continueTerminal(id: string): Promise<void> {
-    if (this.workspace === undefined || this.continuingTerminalIds.includes(id)) return;
+    if (this.continuingTerminalIds.includes(id)) return;
     this.error = undefined;
     this.continuingTerminalIds = [...this.continuingTerminalIds, id];
     try {
-      const terminal = await terminalsApi.continueTerminal(this.workspace.projectId, this.workspace.id, id, this.machineId);
+      const terminal = this.workspace === undefined
+        ? await machineTerminalsApi.continueTerminal(id, this.machineId)
+        : await terminalsApi.continueTerminal(this.workspace.projectId, this.workspace.id, id, this.machineId);
       this.terminals = this.terminals.map((item) => item.id === id ? terminal : item);
       if (this.socket === undefined) this.disposeTerminalView();
       this.fitAndNotify();
@@ -308,7 +326,7 @@ export class TerminalPanel extends LitElement {
   private ensureTerminalView(): void {
     const workspace = this.workspace;
     const terminalHost = this.terminalHostElement();
-    if (!this.visible || this.terminal !== undefined || this.selectedId === undefined || terminalHost === undefined || workspace === undefined) return;
+    if (!this.visible || this.terminal !== undefined || this.selectedId === undefined || terminalHost === undefined) return;
     const terminal = new Terminal(terminalOptions(this));
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
@@ -322,13 +340,30 @@ export class TerminalPanel extends LitElement {
       this.sendTerminalInput(data);
     });
     const initialSize = this.fitTerminal();
-    this.connectSocket(workspace.projectId, workspace.id, this.selectedId, terminal, initialSize);
+    if (workspace === undefined) {
+      this.connectMachineSocket(this.selectedId, terminal, initialSize);
+    } else {
+      this.connectSocket(workspace.projectId, workspace.id, this.selectedId, terminal, initialSize);
+    }
     requestAnimationFrame(() => { this.fitAndNotify(); });
     terminal.focus();
   }
 
   private connectSocket(projectId: string, workspaceId: string, terminalId: string, terminal: Terminal, initialSize: TerminalSize | undefined): void {
     const socket = terminalSocket(projectId, workspaceId, terminalId, initialSize, this.machineId);
+    socket.binaryType = "arraybuffer";
+    this.socket = socket;
+    socket.addEventListener("open", () => { this.fitAndNotify(); });
+    socket.addEventListener("message", (event) => {
+      void this.handleSocketMessage(event.data, terminalId, terminal);
+    });
+    socket.addEventListener("close", () => {
+      if (this.socket === socket) this.socket = undefined;
+    });
+  }
+
+  private connectMachineSocket(terminalId: string, terminal: Terminal, initialSize: TerminalSize | undefined): void {
+    const socket = machineTerminalSocket(terminalId, initialSize, this.machineId);
     socket.binaryType = "arraybuffer";
     this.socket = socket;
     socket.addEventListener("open", () => { this.fitAndNotify(); });
@@ -663,7 +698,7 @@ export class TerminalPanel extends LitElement {
               <small @click=${(event: Event) => { void this.closeTerminal(terminal.id, event); }}>×</small>
             </button>
           `)}
-          <button class="new" ?disabled=${this.workspace === undefined} @click=${() => { void this.startTerminal(); }}>+ Shell</button>
+          <button class="new" @click=${() => { void this.startTerminal(); }}>+ Shell</button>
         </div>
         ${this.error === undefined ? null : html`<p class="error">${this.error}</p>`}
         ${this.renderCommandRunNotice()}

@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { ProjectService } from "./projects/projectService.js";
 import { SessionDaemonClient } from "../sessiond/sessionDaemonClient.js";
@@ -152,5 +153,66 @@ async function proxyJson(daemon: SessionProxyDaemon, method: string, path: strin
 
 function requestFailed(reply: FastifyReply, error: unknown): void {
   reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+}
+
+// Machine-level terminals: accessible without a workspace selected.
+// Uses $HOME as the default cwd.
+export function registerMachineTerminalProxyRoutes(app: FastifyInstance, daemon: SessionProxyDaemon = new SessionDaemonClient(), prefix = "/api"): void {
+  const defaultCwd = process.env["HOME"] ?? homedir();
+
+  app.get(`${prefix}/machines/local/terminals`, async (_request, reply) => {
+    try {
+      return await proxyJson(daemon, "GET", `/terminals?cwd=${encodeURIComponent(defaultCwd)}`, undefined, reply);
+    } catch (error) {
+      requestFailed(reply, error);
+      return undefined;
+    }
+  });
+
+  app.post<{ Body: { name?: string; cols?: number; rows?: number } }>(`${prefix}/machines/local/terminals`, async (request, reply) => {
+    try {
+      return await proxyJson(daemon, "POST", "/terminals", { ...request.body, cwd: defaultCwd }, reply);
+    } catch (error) {
+      requestFailed(reply, error);
+      return undefined;
+    }
+  });
+
+  app.delete(`${prefix}/machines/local/terminals`, async (_request, reply) => {
+    try {
+      return await proxyJson(daemon, "DELETE", `/terminals?cwd=${encodeURIComponent(defaultCwd)}`, undefined, reply);
+    } catch (error) {
+      requestFailed(reply, error);
+      return undefined;
+    }
+  });
+
+  app.delete<{ Params: { terminalId: string } }>(`${prefix}/machines/local/terminals/:terminalId`, async (request, reply) => {
+    try {
+      return await proxyJson(daemon, "DELETE", `/terminals/${encodeURIComponent(request.params.terminalId)}`, undefined, reply);
+    } catch (error) {
+      requestFailed(reply, error);
+      return undefined;
+    }
+  });
+
+  app.post<{ Params: { terminalId: string } }>(`${prefix}/machines/local/terminals/:terminalId/continue`, async (request, reply) => {
+    try {
+      return await proxyJson(daemon, "POST", `/terminals/${encodeURIComponent(request.params.terminalId)}/continue`, undefined, reply);
+    } catch (error) {
+      requestFailed(reply, error);
+      return undefined;
+    }
+  });
+
+  app.get<{ Params: { terminalId: string }; Querystring: { cols?: string; rows?: string } }>(`${prefix}/machines/local/terminals/:terminalId/socket`, { websocket: true }, (socket, request) => {
+    try {
+      const sizeQuery = terminalSizeQuery(request.query.cols, request.query.rows);
+      bridgeSockets(socket, daemon.connectWebSocket(`/terminals/${request.params.terminalId}/socket${sizeQuery}`));
+    } catch (error) {
+      socket.send(JSON.stringify({ type: "error", message: error instanceof Error ? error.message : String(error) }));
+      socket.close();
+    }
+  });
 }
 

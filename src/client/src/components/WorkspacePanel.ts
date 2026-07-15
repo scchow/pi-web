@@ -49,17 +49,36 @@ export class WorkspacePanel extends LitElement {
 
   override render() {
     const workspace = this.workspace;
-    if (workspace === undefined) return this.renderEmptyState(this.emptyState ?? {
-      title: "Select a workspace",
-      body: "Choose a workspace to inspect files, Git, or terminals.",
-    });
+    const visiblePanels = this.panels;
+    // When no workspace but panels are provided (e.g., machine-level terminal), render them
+    if (workspace === undefined) {
+      if (visiblePanels.length > 0) {
+        return this.renderPanels(visiblePanels);
+      }
+      return this.renderEmptyState(this.emptyState ?? {
+        title: "Select a workspace",
+        body: "Choose a workspace to inspect files, Git, or terminals.",
+      });
+    }
     const context = this.panelContext;
     if (context === undefined) return this.renderEmptyState({
       title: "Workspace tools unavailable",
       body: "Try selecting the workspace again.",
     });
-    const visiblePanels = this.panels;
     const selectedPanel = visiblePanels.find((panel) => panel.id === this.tool) ?? visiblePanels[0];
+    return this.renderPanelsWithWorkspace(visiblePanels, selectedPanel, context);
+  }
+
+  private renderPanels(visiblePanels: QualifiedWorkspacePanelContribution[]): TemplateResult {
+    const selectedPanel = visiblePanels.find((panel) => panel.id === this.tool) ?? visiblePanels[0];
+    return this.renderPanelsWithWorkspace(visiblePanels, selectedPanel, undefined);
+  }
+
+  private renderPanelsWithWorkspace(
+    visiblePanels: QualifiedWorkspacePanelContribution[],
+    selectedPanel: QualifiedWorkspacePanelContribution | undefined,
+    context: WorkspacePanelContext | undefined,
+  ): TemplateResult {
     return html`
       ${this.hideToolTabs ? null : html`
         <header>
@@ -68,7 +87,7 @@ export class WorkspacePanel extends LitElement {
               <div class="tabs">
                 ${visiblePanels.map((panel) => {
                   const selected = selectedPanel?.id === panel.id;
-                  const badge = panel.badge?.(context);
+                  const badge = context !== undefined ? panel.badge?.(context) : undefined;
                   const ariaLabel = this.panelTabAriaLabel(panel, badge);
                   return html`
                     <button class=${this.panelTabClass(panel, selected)} title=${ariaLabel} aria-label=${ariaLabel} aria-pressed=${String(selected)} @click=${() => { this.onSelectTool(panel.id); }}>

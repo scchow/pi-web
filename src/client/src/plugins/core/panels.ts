@@ -32,16 +32,25 @@ export function createCoreWorkspacePanels(): WorkspacePanelContribution[] {
   ];
 }
 
-function renderFiles(context: WorkspacePanelContext): TemplateResult {
+function renderFiles(context: WorkspacePanelContext | undefined): TemplateResult {
+  if (context === undefined) return html`<p class="muted">Select a workspace to browse files.</p>`;
   return html`<workspace-files-panel .context=${context}></workspace-files-panel>`;
 }
 
-function renderTerminal(context: WorkspacePanelContext): TemplateResult {
+function renderTerminal(context: WorkspacePanelContext | undefined): TemplateResult {
   loadTerminalPanel();
-  return html`<terminal-panel .workspace=${context.workspace} .machineId=${context.machine.id} .selectedTerminalId=${context.selectedTerminalId} .autoStart=${context.terminalAutoStart} .onSelectTerminal=${context.onSelectTerminal}></terminal-panel>`;
+  // When no workspace context (machine-level terminal), pass undefined workspace
+  return html`<terminal-panel
+    .workspace=${context?.workspace}
+    .machineId=${context?.machine.id ?? "local"}
+    .selectedTerminalId=${context?.selectedTerminalId}
+    .autoStart=${context?.terminalAutoStart ?? false}
+    .onSelectTerminal=${context?.onSelectTerminal ?? ((): void => { void 0; })}
+  ></terminal-panel>`;
 }
 
-function renderGit(context: WorkspacePanelContext): TemplateResult {
+function renderGit(context: WorkspacePanelContext | undefined): TemplateResult {
+  if (context === undefined) return html`<p class="muted">Select a workspace to view Git status.</p>`;
   const status = context.gitStatus;
   return html`
     <section class="toolbar">
@@ -68,7 +77,8 @@ function renderGit(context: WorkspacePanelContext): TemplateResult {
   `;
 }
 
-function renderDiffViewer(context: WorkspacePanelContext): TemplateResult {
+function renderDiffViewer(context: WorkspacePanelContext | undefined): TemplateResult {
+  if (context === undefined) return html`<p class="muted">Select a workspace to view diffs.</p>`;
   if (context.selectedDiffPath === undefined || context.selectedDiffPath === "") return html`<p class="muted">Select a changed file.</p>`;
   const unstaged = context.selectedDiff;
   const staged = context.selectedStagedDiff;
