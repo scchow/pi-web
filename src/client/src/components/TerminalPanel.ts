@@ -161,17 +161,17 @@ export class TerminalPanel extends LitElement {
     try {
       const filter = this.terminalFilter;
       const shouldAutoStart = this.consumeAutoStart();
-      let terminals: TerminalInfo[];
-      let commandRuns: TerminalCommandRun[];
-      if (filter === undefined) {
-        terminals = await machineTerminalsApi.terminals(this.machineId);
-        commandRuns = await terminalsApi.listCommandRuns(undefined, this.machineId);
-      } else {
-        [terminals, commandRuns] = await Promise.all([
-          terminalsApi.terminals(filter.projectId, filter.workspaceId, this.machineId),
-          terminalsApi.listCommandRuns(filter, this.machineId),
-        ]);
-      }
+      const [terminals, commandRuns] = await Promise.all(
+        filter === undefined
+          ? [
+              machineTerminalsApi.terminals(this.machineId),
+              terminalsApi.listCommandRuns(undefined, this.machineId),
+            ]
+          : [
+              terminalsApi.terminals(filter.projectId, filter.workspaceId, this.machineId),
+              terminalsApi.listCommandRuns(filter, this.machineId),
+            ],
+      );
       this.terminals = terminals;
       this.commandRuns = commandRuns;
       this.selectPreferredLoadedTerminal({ replaceUrl: true });
