@@ -319,6 +319,7 @@ describe("PluginRegistry", () => {
 
     expect(shortcuts).toEqual([
       ["core:actions.show", "mod+k"],
+      ["core:actions.show-ctrl-b", "ctrl+b"],
       ["core:prompt.focus", "mod+g c"],
       ["core:settings.open", "mod+,"],
       ["core:view.chat", "mod+1"],

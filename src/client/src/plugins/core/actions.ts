@@ -17,6 +17,14 @@ export function createCoreActions(): PluginAction[] {
       run: (context) => { context.openActionPalette(); },
     },
     {
+      id: "actions.show-ctrl-b",
+      title: "Show Actions",
+      description: "Open the command palette",
+      shortcut: "ctrl+b",
+      group: "General",
+      run: (context) => { context.openActionPalette(); },
+    },
+    {
       id: "prompt.focus",
       title: "Focus Prompt",
       description: "Move keyboard focus to the message composer",
