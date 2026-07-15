@@ -167,8 +167,8 @@ export class AppMobileMainTabs extends LitElement {
     .tab-badge { flex: 0 0 auto; display: inline-block; min-width: 14px; margin-left: 0; border: 1px solid var(--pi-success-border); border-radius: 999px; background: var(--pi-success-surface); color: var(--pi-success); padding: 0 5px; font-size: 11px; line-height: 16px; text-align: center; }
     button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; cursor: pointer; }
     @media (max-width: 760px) {
-      .mobile-tabs { gap: 4px; padding: 6px 8px; }
-      .mobile-tabs button { min-width: 44px; height: 44px; justify-content: center; gap: 4px; padding: 0 8px; }
+      .mobile-tabs { gap: 2px; padding: 6px; }
+      .mobile-tabs button { flex: 1 1 0; min-width: 0; height: 36px; justify-content: center; gap: 4px; padding: 0 4px; }
       .mobile-tabs .navigation-tab { display: inline-flex; }
       .tab-fallback { display: inline-block; }
       .tab-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
