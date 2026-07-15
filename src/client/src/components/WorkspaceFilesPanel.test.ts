@@ -61,12 +61,15 @@ describe("workspace-files-panel file tree boundary", () => {
 
     const rendered = panel.render();
 
-    // The nested child (main.ts) is only reachable when the expanded directory
-    // actually renders its children, so a working click handler on it proves the
-    // expanded-tree structure without scraping markup for the row text.
-    templateClickHandlerForText(rendered, "main.ts")(new Event("click"));
-    templateClickHandlerForText(rendered, "src")(new Event("click"));
-    templateClickHandlerForText(rendered, "README.md")(new Event("click"));
+    expect(text).toContain("tree-icon");
+    expect(text).toContain("src");
+    expect(text).toContain("main.ts");
+    expect(text).toContain("README.md");
+    expect(text).toContain("Binary file: README.md · 4.0 KB");
+    expect(text).not.toContain("Select a file.");
+
+    findTemplateClickHandlerForText<Event>(rendered, "src")(new Event("click"));
+    findTemplateClickHandlerForText<Event>(rendered, "README.md")(new Event("click"));
 
     expect(onExpandDir).toHaveBeenCalledWith("src");
     expect(onSelectFile).toHaveBeenCalledWith("src/main.ts");
