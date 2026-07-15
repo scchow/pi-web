@@ -116,7 +116,7 @@ export class PluginRegistry {
       ...(machineId === undefined ? {} : { machineId }),
       visible: (context: WorkspacePanelContext) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) && (visible?.(workspacePanelContextFor(context, pluginId)) ?? true),
       ...(badge === undefined ? {} : { badge: (context: WorkspacePanelContext) => this.isContributionActive(pluginId, machineId, context.machine.id, sourcePluginId) ? badge(workspacePanelContextFor(context, pluginId)) : undefined }),
-      render: (context: WorkspacePanelContext) => panel.render(workspacePanelContextFor(context, pluginId)),
+      render: (context: WorkspacePanelContext | undefined) => panel.render(context === undefined ? undefined : workspacePanelContextFor(context, pluginId)),
     };
   }
 

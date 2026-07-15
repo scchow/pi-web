@@ -106,7 +106,7 @@ describe("PluginRegistry", () => {
                 id: "workspace.prompt",
                 title: "Prompt",
                 render: (context) => {
-                  context.prompt.insertText("@docs/example.md");
+                  context?.prompt.insertText("@docs/example.md");
                   return html`<p>Prompt</p>`;
                 },
               },

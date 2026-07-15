@@ -183,7 +183,7 @@ export interface WorkspacePanelContribution {
   order?: number;
   visible?: (context: WorkspacePanelContext) => boolean;
   badge?: (context: WorkspacePanelContext) => string | number | TemplateResult | undefined;
-  render: (context: WorkspacePanelContext) => TemplateResult;
+  render: (context: WorkspacePanelContext | undefined) => TemplateResult;
 }
 
 export interface QualifiedWorkspacePanelContribution extends WorkspacePanelContribution {

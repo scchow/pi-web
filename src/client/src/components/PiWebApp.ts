@@ -1261,7 +1261,10 @@ export class PiWebApp extends LitElement {
 
   private visibleWorkspacePanels(): QualifiedWorkspacePanelContribution[] {
     const workspace = this.state.selectedWorkspace;
-    if (workspace === undefined) return [];
+    if (workspace === undefined) {
+      // Show only the terminal panel when no workspace is selected (machine-level terminals)
+      return this.plugins.getWorkspacePanels().filter((panel) => panel.id === "core:workspace.terminal");
+    }
     const context = this.createWorkspacePanelContext(workspace);
     return this.plugins.getWorkspacePanels().filter((panel) => panel.visible?.(context) ?? true);
   }

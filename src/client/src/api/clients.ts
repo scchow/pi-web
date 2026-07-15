@@ -265,6 +265,15 @@ export const terminalsApi = {
   cancelCommandRun: (runId: string, machineId = "local") => request(`${machinePrefix(machineId)}/terminal-command-runs/${encodeURIComponent(runId)}/cancel`, parseTerminalCommandRun, { method: "POST" }),
 };
 
+// Machine-level terminals: accessible without a workspace selected.
+export const machineTerminalsApi = {
+  terminals: (machineId = "local") => request(`${machinePrefix(machineId)}/terminals`, arrayOf(parseTerminalInfo)),
+  startTerminal: (options?: { name?: string; cols?: number; rows?: number }, machineId = "local") => request(`${machinePrefix(machineId)}/terminals`, parseTerminalInfo, { method: "POST", body: JSON.stringify(options ?? {}) }),
+  closeAllTerminals: (machineId = "local") => request(`${machinePrefix(machineId)}/terminals`, parseClosed, { method: "DELETE" }),
+  closeTerminal: (terminalId: string, machineId = "local") => request(`${machinePrefix(machineId)}/terminals/${encodeURIComponent(terminalId)}`, parseClosed, { method: "DELETE" }),
+  continueTerminal: (terminalId: string, machineId = "local") => request(`${machinePrefix(machineId)}/terminals/${encodeURIComponent(terminalId)}/continue`, parseTerminalInfo, { method: "POST" }),
+};
+
 async function getOptionalTerminalCommandRun(runId: string, machineId: string): Promise<TerminalCommandRun | undefined> {
   const response = await fetch(resolveAppUrl(`${machinePrefix(machineId)}/terminal-command-runs/${encodeURIComponent(runId)}`));
   if (response.status === 404) return undefined;

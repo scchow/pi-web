@@ -17,7 +17,7 @@ import { SessionDaemonClient } from "../sessiond/sessionDaemonClient.js";
 import { registerSessionProxyRoutes, type SessionProxyDaemon } from "./sessiond/sessionProxyRoutes.js";
 import { registerWorkspaceExplorerRoutes } from "./workspaceExplorerRoutes.js";
 import { registerGitRoutes } from "./gitRoutes.js";
-import { registerTerminalProxyRoutes } from "./terminalProxyRoutes.js";
+import { registerMachineTerminalProxyRoutes, registerTerminalProxyRoutes } from "./terminalProxyRoutes.js";
 import { registerWorkspaceDeletionRoutes } from "./workspaces/workspaceDeletionRoutes.js";
 import { createFilePiWebConfigService, registerConfigRoutes, registerLocalMachineConfigRoutes, type PiWebConfigService } from "./configRoutes.js";
 import { PiWebPluginService } from "./piWebPluginService.js";
@@ -229,6 +229,7 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   registerGitRoutes(app, projects, workspaces, "/api/machines/local");
   registerTerminalProxyRoutes(app, projects, workspaces, sessionDaemon);
   registerTerminalProxyRoutes(app, projects, workspaces, sessionDaemon, "/api/machines/local");
+  registerMachineTerminalProxyRoutes(app, sessionDaemon);
   registerWorkspaceDeletionRoutes(app, projects, workspaces, sessionDaemon);
   registerWorkspaceDeletionRoutes(app, projects, workspaces, sessionDaemon, "/api/machines/local");
 
