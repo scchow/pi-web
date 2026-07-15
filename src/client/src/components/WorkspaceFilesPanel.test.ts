@@ -57,7 +57,7 @@ describe("workspace-files-panel file tree boundary", () => {
     const rendered = panel.render();
     const text = collectTemplateText(rendered);
 
-    expect(text).toContain("▾");
+    expect(text).toContain("tree-icon");
     expect(text).toContain("src");
     expect(text).toContain("main.ts");
     expect(text).toContain("README.md");

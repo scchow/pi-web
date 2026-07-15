@@ -1,4 +1,4 @@
-import { css, html, LitElement, type PropertyValues, type TemplateResult } from "lit";
+import { css, html, LitElement, svg, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import type { FileContentResponse, FileTreeEntry } from "../api";
 import { workspaceImagePreviewUrl } from "../api/urls";
@@ -80,9 +80,12 @@ export class WorkspaceFilesPanel extends LitElement {
     const children = context.expandedDirs[entry.path];
     const hasChildren = children !== undefined;
     const selected = entry.type !== "directory" && context.selectedFilePath === entry.path;
+    const icon = entry.type === "directory"
+      ? (hasChildren ? renderOpenFolderIcon() : renderClosedFolderIcon())
+      : renderFileIcon();
     return html`
       <button class=${selected ? "row selected" : "row"} style=${`--depth:${String(depth)}`} @click=${() => { this.selectTreeEntry(context, entry); }}>
-        <span>${entry.type === "directory" ? (hasChildren ? "▾" : "▸") : "·"}</span>
+        <span class="tree-icon" aria-hidden="true">${icon}</span>
         <span>${entry.name}</span>
       </button>
       ${hasChildren ? children.map((child) => this.renderTreeEntry(context, child, depth + 1)) : null}
@@ -329,6 +332,8 @@ export class WorkspaceFilesPanel extends LitElement {
     workspacePanelStyles,
     css`
       :host { flex: 1 1 auto; }
+      .tree-icon { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex-shrink: 0; }
+      .tree-svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; }
       .files-panel { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
       .toolbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
       .toolbar .toolbar-actions button { margin-left: 0; }
@@ -489,4 +494,28 @@ function formatFileSize(size: number): string {
 
 function formatScaledFileSize(value: number): string {
   return value >= 10 ? String(Math.round(value)) : value.toFixed(1);
+}
+
+function renderClosedFolderIcon(): TemplateResult {
+  return svg`
+    <svg class="tree-svg" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M1.5 3.5A1.5 1.5 0 0 1 3 2h2.5L6.5 3.5H13A1.5 1.5 0 0 1 14.5 5v7A1.5 1.5 0 0 1 13 13.5h-11A1.5 1.5 0 0 1 .5 12V5A1.5 1.5 0 0 1 1.5 3.5Z"></path>
+    </svg>
+  `;
+}
+
+function renderOpenFolderIcon(): TemplateResult {
+  return svg`
+    <svg class="tree-svg" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M1.5 3.5A1.5 1.5 0 0 1 3 2h2.5L6.5 3.5H13A1.5 1.5 0 0 1 14.5 5v1H8l-2 7H2.5l.5-2H2A1.5 1.5 0 0 1 .5 9.5V5A1.5 1.5 0 0 1 1.5 3.5Z"></path>
+    </svg>
+  `;
+}
+
+function renderFileIcon(): TemplateResult {
+  return svg`
+    <svg class="tree-svg" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M3.5 2A1.5 1.5 0 0 0 2 3.5v9A1.5 1.5 0 0 0 3.5 14h9a1.5 1.5 0 0 0 1.5-1.5V7.5L10.5 2H3.5ZM10 2.5v3h3.5L10 2.5Z"></path>
+    </svg>
+  `;
 }
