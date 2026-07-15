@@ -45,6 +45,8 @@ import type {
   SessionNotificationInboxSnapshot,
   SessionWarning,
 } from "../../shared/apiTypes.js";
+import { createExtensionUIContext, type PendingExtensionUiRequest } from "./extensionUiContext.js";
+import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type { SessionRouteLookup, SessionRouteRef, SessionRouteService } from "./sessionService.js";
 
 import { type AuthChange } from "./authService.js";
@@ -634,6 +636,11 @@ export class PiSessionService implements SessionRouteService {
   private readonly now: () => Date;
   private readonly notificationStore: SessionNotificationStore;
   private readonly notificationGenerationBySession = new WeakMap<PiAgentSession, SessionNotificationGeneration>();
+  /**
+   * Pending extension UI dialog requests waiting for client response.
+   * Keyed by requestId (UUID generated per dialog).
+   */
+  private readonly pendingExtensionUiRequests = new Map<string, PendingExtensionUiRequest>();
 
   constructor(private readonly events: SessionEventHub, deps: PiSessionServiceDependencies) {
     this.archiveStore = deps.archiveStore ?? new SessionArchiveStore();
@@ -1419,6 +1426,18 @@ export class PiSessionService implements SessionRouteService {
     await this.assertWritable(ref);
     const active = await this.getActive(ref);
     return this.commandService.respond(active.runtime.session.sessionId, requestId, value);
+  }
+
+  async respondToExtensionUi(ref: PiSessionLookup, requestId: string, response: Record<string, unknown>): Promise<void> {
+    await this.assertWritable(ref);
+    await this.getActive(ref);
+    const entry = this.pendingExtensionUiRequests.get(requestId);
+    if (!entry) throw new Error("Extension UI request expired or not found");
+
+    // Clean up timeout if still pending
+    if (entry.timeoutId) clearTimeout(entry.timeoutId);
+    this.pendingExtensionUiRequests.delete(requestId);
+    entry.resolve(response);
   }
 
   private async reloadSessionRuntime(session: PiAgentSession): Promise<void> {

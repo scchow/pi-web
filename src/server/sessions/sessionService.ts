@@ -62,6 +62,7 @@ export interface SessionRouteService {
   shell(ref: SessionRouteLookup, text: string): Promise<void>;
   runCommand(ref: SessionRouteLookup, text: string): Promise<ClientCommandResult>;
   respondToCommand(ref: SessionRouteLookup, requestId: string, value: string): Promise<ClientCommandResult>;
+  respondToExtensionUi(ref: SessionRouteLookup, requestId: string, response: Record<string, unknown>): Promise<void>;
   abort(ref: SessionRouteLookup): Promise<void>;
   stop(ref: SessionRouteLookup): void | Promise<void>;
   archive(ref: SessionRouteLookup): Promise<void>;

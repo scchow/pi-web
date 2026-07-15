@@ -155,6 +155,7 @@ export class RealtimeSocket {
 export function parseSessionSocketEvent(event: unknown): SessionUiEvent | undefined {
   const type = eventType(event);
   if (type === "notifications.inbox") return safelyParseNotificationEvent(() => parseSessionNotificationInboxEvent(event));
+  if (["message.append", "assistant.delta", "assistant.thinking.delta", "tool.start", "tool.update", "tool.end", "shell.start", "shell.chunk", "shell.end", "agent.start", "agent.end", "message.end", "status.update", "activity.update", "command.output", "session.error", "session.name", "session.created", "pi.event", "extension_ui.select", "extension_ui.confirm", "extension_ui.input", "extension_ui.editor", "extension_ui.notify"].includes(type)) return event as SessionUiEvent;
   return isLegacySessionUiEvent(event) ? event : undefined;
 }
 

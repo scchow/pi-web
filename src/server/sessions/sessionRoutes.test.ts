@@ -667,6 +667,7 @@ class CapturingRouteSessionService implements SessionRouteService {
   shell(): never { throw unusedRouteMethod("shell"); }
   runCommand(): never { throw unusedRouteMethod("runCommand"); }
   respondToCommand(): never { throw unusedRouteMethod("respondToCommand"); }
+  respondToExtensionUi(): never { throw unusedRouteMethod("respondToExtensionUi"); }
   abort(): never { throw unusedRouteMethod("abort"); }
   stop(): never { throw unusedRouteMethod("stop"); }
   archive(): never { throw unusedRouteMethod("archive"); }

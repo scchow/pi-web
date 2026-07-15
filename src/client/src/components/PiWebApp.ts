@@ -1,6 +1,7 @@
 import { LitElement, html } from "lit";
 import { customElement, query, state } from "lit/decorators.js";
-import { configApi, effectiveWorkspaceUploadFolder, sessionsApi, terminalsApi, workspacesApi, workspaceEffectiveUploadFolder, type Machine, type MachineHealth, type PiWebConfigValues, type PiWebShortcutConfig, type Project, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupRequest, type SessionInfo, type TerminalCommandRun, type TerminalUiEvent, type Workspace } from "../api";
+import { configApi, effectiveWorkspaceUploadFolder, sessionsApi, terminalsApi, workspacesApi, workspaceEffectiveUploadFolder, type Machine, type MachineHealth, type PiWebConfigValues, type PiWebShortcutConfig, type Project, type RealtimeEvent, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupRequest, type SessionInfo, type TerminalCommandRun, type TerminalUiEvent, type Workspace } from "../api";
+import type { ExtensionUiDialogRequest, ExtensionUiNotification } from "../../../shared/apiTypes";
 import type { AppAction } from "../actions";
 import { initialAppState, type AppState } from "../appState";
 import { isSessionActive } from "../../../shared/activity";
@@ -48,6 +49,7 @@ import "./ProjectList";
 import "./WorkspaceList";
 import "./SessionList";
 import "./SessionCleanupDialog";
+import "./ExtensionUiDialog";
 import "./ChatView";
 import type { ChatView } from "./ChatView";
 import "./PromptEditor";
@@ -108,12 +110,28 @@ export class PiWebApp extends LitElement {
     (patch) => { this.setState(patch); },
     { onBackgroundError: (message, error) => { console.warn(message, error); } },
   );
+
+
+  private readonly onMobileViewportResize = () => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    // On mobile, set explicit height to match visible viewport
+    this.style.height = String(vv.height) + "px";
+  };
   private readonly sessions = new SessionController(
     () => this.state,
     (patch) => { this.setState(patch); },
     () => { this.updateUrl(); },
     new SessionStorageSessionSelectionMemory(),
-    { notifications: this.notifications },
+    {
+      notifications: this.notifications,
+      onExtensionUiDialog: (request: ExtensionUiDialogRequest) => {
+        this.setState({ extensionUiDialog: request });
+      },
+      onExtensionUiNotify: (notification: ExtensionUiNotification) => {
+        this.setState({ error: notification.message });
+      },
+    },
   );
   private readonly projectActivityOwnership = new ProjectActivityOwnershipCoordinator(
     () => this.state,
@@ -250,6 +268,10 @@ export class PiWebApp extends LitElement {
     this.browserResume.connect();
     window.addEventListener("keydown", this.onKeyDown, GLOBAL_SHORTCUT_LISTENER_OPTIONS);
     this.systemLightThemeMedia?.addEventListener("change", this.onSystemLightThemeChange);
+    if (window.visualViewport) {
+      this.onMobileViewportResize();
+      window.visualViewport.addEventListener("resize", this.onMobileViewportResize);
+    }
     this.applyPreferredTheme(false);
     this.connectRealtime();
     this.piWebStatusTimer = window.setInterval(() => { this.schedulePiWebStatusRefresh(); }, PI_WEB_STATUS_REFRESH_MS);
@@ -265,6 +287,8 @@ export class PiWebApp extends LitElement {
     this.browserResume.disconnect();
     window.removeEventListener("keydown", this.onKeyDown, GLOBAL_SHORTCUT_LISTENER_OPTIONS);
     this.systemLightThemeMedia?.removeEventListener("change", this.onSystemLightThemeChange);
+    window.visualViewport?.removeEventListener("resize", this.onMobileViewportResize);
+    this.style.height = ""; // reset to CSS 100dvh
     this.keyboard.reset();
     this.auth.dispose();
     this.sessions.dispose();
@@ -1924,6 +1948,11 @@ export class PiWebApp extends LitElement {
     void this.openThinkingDialog();
   };
 
+  private readonly handleExtensionUiResponse = async (requestId: string, response: Record<string, unknown>): Promise<void> => {
+    this.setState({ extensionUiDialog: undefined });
+    await this.sessions.respondToExtensionUi(requestId, response);
+  };
+
   private renderChatView(state: AppState, session: SessionInfo) {
     return html`
       <chat-view .sessionId=${session.id} .messages=${state.messages} .messageStart=${state.messagePageStart} .messageEnd=${state.messagePageEnd} .messageTotal=${state.messagePageTotal} .hasMore=${state.messagePageStart > 0} .loadingMore=${state.isLoadingEarlierMessages} .isSendingPrompt=${state.sendingPrompts[session.id] === true} .isCompacting=${state.status?.isCompacting === true} .pendingMessageCount=${state.status?.pendingMessageCount ?? 0} .clientQueuedMessages=${state.clientQueuedSessionMessages[session.id] ?? []} .status=${state.status} .activity=${state.activity} .notificationInbox=${selectedNotificationView(state.selectedNotificationInbox)} .canClearServerQueue=${this.canClearServerQueue()} .onClearServerQueue=${this.handleClearServerQueue} .onDismissWarning=${this.handleDismissWarning} .onDismissNotification=${this.handleDismissNotification} .onDismissAllNotifications=${this.handleDismissAllNotifications} .onLoadMore=${() => this.withChatPrependTransition(() => this.sessions.loadEarlierMessages())}></chat-view>
@@ -1989,6 +2018,7 @@ export class PiWebApp extends LitElement {
           <div class="mobile-navigation-panel">${this.appShell.isMobileNavigationLayout ? this.renderNavigationPanel() : null}</div>
           ${state.selectedSession ? html`
             ${this.renderChatView(state, state.selectedSession)}
+            ${state.extensionUiDialog !== undefined ? html`<extension-ui-dialog .request=${state.extensionUiDialog} .onResponse=${(requestId: string, response: Record<string, unknown>) => { void this.handleExtensionUiResponse(requestId, response); }} .onCancel=${() => { this.setState({ extensionUiDialog: undefined }); }}></extension-ui-dialog>` : null}
             <prompt-editor .sessionId=${state.selectedSession.id} .cwd=${state.selectedWorkspace?.path} .machineId=${selectedMachineId(state)} .projectId=${state.selectedWorkspace?.projectId} .workspaceId=${state.selectedWorkspace?.id} .workspaceScopedFileSuggestions=${this.supportsWorkspaceFileSuggestions()} .disabled=${state.selectedSession.archived === true} .canSteer=${state.status?.isStreaming === true} .isCompacting=${state.status?.isCompacting === true} .canStop=${state.status?.isStreaming === true || state.status?.isBashRunning === true || state.status?.isCompacting === true || (state.status?.pendingMessageCount ?? 0) > 0} .status=${state.status} .availableThinkingLevels=${state.availableThinkingLevels} .sending=${state.sendingPrompts[state.selectedSession.id] === true} .onSend=${this.handleSendPrompt} .onStop=${this.handleStopActiveWork} .onSelectModel=${this.handleSelectModel} .onSelectThinking=${this.handleSelectThinking}></prompt-editor>
             <status-bar .status=${state.status}></status-bar>
             ${state.commandDialog !== undefined ? html`<command-picker .title=${state.commandDialog.title} .options=${state.commandDialog.options} .onPick=${(value: string) => this.sessions.respondToCommand(state.commandDialog?.requestId ?? "", value)} .onCancel=${() => { this.sessions.cancelCommand(); }}></command-picker>` : null}

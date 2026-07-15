@@ -870,9 +870,27 @@ type SessionUiEventBody =
   | { type: "session.error"; message: string }
   | { type: "session.name"; sessionId: string; name?: string }
   | { type: "session.created"; session: SessionInfo }
-  | { type: "pi.event"; eventType: string };
+  | { type: "pi.event"; eventType: string }
+  | { type: "extension_ui.select"; requestId: string; title: string; message?: string; options: string[]; timeout?: number }
+  | { type: "extension_ui.confirm"; requestId: string; title: string; message?: string; timeout?: number }
+  | { type: "extension_ui.input"; requestId: string; title: string; placeholder?: string }
+  | { type: "extension_ui.editor"; requestId: string; title: string; prefill?: string }
+  | { type: "extension_ui.notify"; message: string; notifyType?: "info" | "warning" | "error" };
 
 export type GlobalSessionEvent =
   | Extract<SessionUiEventBody, { type: "status.update" | "activity.update" | "session.name" | "session.created" }>
   | SessionNotificationSummaryEvent;
 export type RealtimeEvent = GlobalSessionEvent | TerminalUiEvent | WorkspaceActivityUiEvent;
+
+/** Extension UI dialog request from the agent. */
+export type ExtensionUiDialogRequest =
+  | { kind: "select"; requestId: string; title: string; message?: string; options: string[]; timeout?: number }
+  | { kind: "confirm"; requestId: string; title: string; message?: string; timeout?: number }
+  | { kind: "input"; requestId: string; title: string; placeholder?: string }
+  | { kind: "editor"; requestId: string; title: string; prefill?: string };
+
+/** Extension UI notification from the agent (fire-and-forget). */
+export interface ExtensionUiNotification {
+  message: string;
+  type?: "info" | "warning" | "error";
+}

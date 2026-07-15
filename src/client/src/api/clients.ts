@@ -229,6 +229,7 @@ export const sessionsApi = {
   shell: (session: SessionLookup, text: string, machineId = "local") => request(sessionPath(session, "shell", machineId), parseAccepted, { method: "POST", body: sessionBody(session, { text }) }),
   runCommand: (session: SessionLookup, text: string, machineId = "local") => request(sessionPath(session, "commands/run", machineId), parseCommandResult, { method: "POST", body: sessionBody(session, { text }) }),
   respondToCommand: (session: SessionLookup, requestId: string, value: string, machineId = "local") => request(sessionPath(session, "commands/respond", machineId), parseCommandResult, { method: "POST", body: sessionBody(session, { requestId, value }) }),
+  respondToExtensionUi: (session: SessionLookup, requestId: string, response: Record<string, unknown>, machineId = "local") => request(sessionPath(session, "extension-ui/respond", machineId), parseAccepted, { method: "POST", body: sessionBody(session, { requestId, response }) }),
   abort: (session: SessionLookup, machineId = "local") => request(sessionPath(session, "abort", machineId), parseAborted, { method: "POST", body: sessionBody(session) }),
   stop: (session: SessionLookup, machineId = "local") => request(sessionPath(session, "stop", machineId), parseStopped, { method: "POST", body: sessionBody(session) }),
   archive: (session: SessionLookup, machineId = "local") => request(sessionPath(session, "archive", machineId), parseArchived, { method: "POST", body: sessionBody(session) }),

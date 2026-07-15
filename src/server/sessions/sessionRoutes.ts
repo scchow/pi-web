@@ -286,6 +286,18 @@ export function registerSessionRoutes(app: FastifyInstance, sessions: SessionRou
     }
   });
 
+  app.post<{ Params: { sessionId: string }; Body: { cwd?: unknown; requestId?: unknown; response?: unknown } | undefined }>(`${prefix}/sessions/:sessionId/extension-ui/respond`, async (request, reply) => {
+    try {
+      const body = optionalRecord(request.body);
+      const response = body["response"];
+      if (!isRecord(response)) throw new Error("response field must be an object");
+      await sessions.respondToExtensionUi(sessionLookupFromBody(request.params.sessionId, body), requireString(body, "requestId"), response);
+      return { accepted: true };
+    } catch (error) {
+      return reply.code(mutationErrorStatus(error)).send({ error: errorMessage(error) });
+    }
+  });
+
   app.post<{ Params: { sessionId: string }; Body: { cwd?: unknown } | undefined }>(`${prefix}/sessions/:sessionId/abort`, async (request, reply) => {
     try {
       await sessions.abort(sessionLookupFromBody(request.params.sessionId, optionalRecord(request.body)));

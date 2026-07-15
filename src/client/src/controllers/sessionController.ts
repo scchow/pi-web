@@ -1,4 +1,5 @@
-import { api as defaultApi, type CommandResult, type PromptAttachment, type QueuedSessionMessage, type SessionActivity, type SessionBulkFailure, type SessionCleanupExecuteResponse, type SessionInfo, type SessionRef, type SessionStatus, type SessionStreamSnapshot, type Workspace } from "../api";
+import { api as defaultApi, type CommandResult, type PromptAttachment, type QueuedSessionMessage, type SessionActivity, type SessionBulkFailure, type SessionCleanupExecuteResponse, type SessionInfo, type SessionRef, type SessionStatus, type Workspace } from "../api";
+import type { ExtensionUiDialogRequest, ExtensionUiNotification } from "../../../shared/apiTypes";
 import type { AppState } from "../appState";
 import { forgetCachedNewSession, isCachedNewSessionInfo, markCachedNewSessionInfo, mergeCachedNewSessions, rememberCachedNewSession, stripCachedNewSessionMarker } from "../cachedNewSessions";
 import { textMessage } from "../chatMessages";
@@ -43,7 +44,10 @@ export interface SessionControllerDependencies {
   api?: typeof defaultApi;
   socket?: SessionEventSocket;
   transcripts?: ChatTranscriptStore;
+<<<<<<< HEAD
   notifications?: SessionNotificationSessionBridge;
+  onExtensionUiDialog?: (request: ExtensionUiDialogRequest) => void;
+  onExtensionUiNotify?: (notification: ExtensionUiNotification) => void;
 }
 
 interface BulkSessionMutationResult {
@@ -87,6 +91,8 @@ export class SessionController {
   private readonly api: typeof defaultApi;
   private readonly transcripts: ChatTranscriptStore;
   private readonly notifications: SessionNotificationSessionBridge | undefined;
+  private readonly onExtensionUiDialog: ((request: ExtensionUiDialogRequest) => void) | undefined;
+  private readonly onExtensionUiNotify: ((notification: ExtensionUiNotification) => void) | undefined;
   private selectionSeq = 0;
   // Join-time stream watermark for the selected session. `seq` is the
   // `SessionEventHub` sequence captured together with the seeded partial by the
@@ -115,6 +121,8 @@ export class SessionController {
     this.api = deps.api ?? defaultApi;
     this.transcripts = deps.transcripts ?? new ChatTranscriptStore();
     this.notifications = deps.notifications;
+    this.onExtensionUiDialog = deps.onExtensionUiDialog;
+    this.onExtensionUiNotify = deps.onExtensionUiNotify;
   }
 
   applyGlobalEvent(event: GlobalSessionEvent): void {
@@ -405,6 +413,16 @@ export class SessionController {
     this.setState({ commandDialog: undefined });
     try {
       this.applyCommandResult(await this.api.respondToCommand(session, requestId, value, selectedMachineId(this.getState())));
+    } catch (error) {
+      this.setState({ error: String(error) });
+    }
+  }
+
+  async respondToExtensionUi(requestId: string, response: Record<string, unknown>) {
+    const session = this.getState().selectedSession;
+    if (!session) return;
+    try {
+      await this.api.respondToExtensionUi(session, requestId, response, selectedMachineId(this.getState()));
     } catch (error) {
       this.setState({ error: String(error) });
     }
@@ -1146,6 +1164,28 @@ export class SessionController {
     // history + partial). Everything past the watermark applies exactly once,
     // so live content streams directly on top of the seeded partial.
     if (this.isStreamEventBelowWatermark(event)) return;
+
+    // Handle extension UI events
+    if (event.type === "extension_ui.select") {
+      this.onExtensionUiDialog?.({ kind: "select", requestId: event.requestId, title: event.title, options: event.options, ...(event.message === undefined ? {} : { message: event.message }), ...(event.timeout === undefined ? {} : { timeout: event.timeout }) });
+      return;
+    }
+    if (event.type === "extension_ui.confirm") {
+      this.onExtensionUiDialog?.({ kind: "confirm", requestId: event.requestId, title: event.title, ...(event.message === undefined ? {} : { message: event.message }), ...(event.timeout === undefined ? {} : { timeout: event.timeout }) });
+      return;
+    }
+    if (event.type === "extension_ui.input") {
+      this.onExtensionUiDialog?.({ kind: "input", requestId: event.requestId, title: event.title, ...(event.placeholder === undefined ? {} : { placeholder: event.placeholder }) });
+      return;
+    }
+    if (event.type === "extension_ui.editor") {
+      this.onExtensionUiDialog?.({ kind: "editor", requestId: event.requestId, title: event.title, ...(event.prefill === undefined ? {} : { prefill: event.prefill }) });
+      return;
+    }
+    if (event.type === "extension_ui.notify") {
+      this.onExtensionUiNotify?.({ message: event.message, ...(event.notifyType === undefined ? {} : { type: event.notifyType }) });
+      return;
+    }
 
     // Status and activity arrive once per token (the server republishes them on
     // every transcript event). Buffer them alongside high-frequency transcript
