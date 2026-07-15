@@ -37,15 +37,16 @@ function renderFiles(context: WorkspacePanelContext | undefined): TemplateResult
   return html`<workspace-files-panel .context=${context}></workspace-files-panel>`;
 }
 
+const NOOP = (): void => { /* no-op */ };
+
 function renderTerminal(context: WorkspacePanelContext | undefined): TemplateResult {
   loadTerminalPanel();
-  // When no workspace context (machine-level terminal), pass undefined workspace
   return html`<terminal-panel
     .workspace=${context?.workspace}
     .machineId=${context?.machine.id ?? "local"}
     .selectedTerminalId=${context?.selectedTerminalId}
     .autoStart=${context?.terminalAutoStart ?? false}
-    .onSelectTerminal=${context?.onSelectTerminal ?? ((): void => { void 0; })}
+    .onSelectTerminal=${context?.onSelectTerminal ?? NOOP}
   ></terminal-panel>`;
 }
 
