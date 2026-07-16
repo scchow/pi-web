@@ -154,8 +154,6 @@ export class ExtensionUiDialog extends LitElement {
       margin-bottom: 6px;
       font-weight: 600;
       font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
       color: var(--pi-warning, #f59e0b);
     }
 
