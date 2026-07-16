@@ -7,6 +7,7 @@ import { LitElement, html, type PropertyValues } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import { api, type FileSuggestion, type PromptAttachment, type SessionStatus, type SlashCommand } from "../api";
 import type { PromptAttachmentDelivery } from "../../../shared/apiTypes";
+import type { ChatLine, ChatPart } from "./shared";
 import { capturePromptAttachments, effectivePromptAttachmentDelivery, isInlinePromptAttachment, promptAttachmentsCanUseInlineDelivery, type CapturedAttachment } from "../promptAttachmentCapture";
 import { inputModeForDraft, inputModesEqual, type InputMode } from "../inputModes";
 import { machineSessionKey } from "../machineKeys";
@@ -25,6 +26,7 @@ type PendingAttachment = CapturedAttachment & { id: string };
 export class PromptEditor extends LitElement {
   @property({ type: Boolean }) disabled = false;
   @property() sessionId?: string;
+  @property({ attribute: false }) messages: ChatLine[] = [];
   @property() cwd?: string;
   @property() machineId = "local";
   @property() projectId?: string;
@@ -52,6 +54,9 @@ export class PromptEditor extends LitElement {
   @state() private currentInputMode: InputMode = { kind: "normal" };
   @state() private completions: CompletionItem[] = [];
   @state() private selectedIndex = 0;
+  // Message history navigation: undefined means not navigating, 0 = most recent user message.
+  private historyIndex: number | undefined = undefined;
+  private historyPreText = ""; // Text in the editor before history navigation started.
   @state() private attachments: PendingAttachment[] = [];
   @state() private attachmentDelivery: PromptAttachmentDelivery = loadAttachmentDelivery();
   @state() private attachmentError: string | undefined = undefined;
@@ -269,8 +274,8 @@ export class PromptEditor extends LitElement {
           }),
           keymap.of([
             { any: (view, event) => this.handleEditorKeyDown(event, view) },
-            { key: "ArrowDown", run: () => this.moveCompletion(1) },
-            { key: "ArrowUp", run: () => this.moveCompletion(-1) },
+            { key: "ArrowDown", run: () => this.moveCompletion(1) || this.cycleHistory(1) },
+            { key: "ArrowUp", run: () => this.moveCompletion(-1) || this.cycleHistory(-1) },
             { key: "Escape", run: () => this.closeCompletions() },
             { key: "Tab", run: (view) => this.handleEditorTab(view) },
             { key: "Shift-Tab", run: (view) => indentWithTab.shift?.(view) ?? false },
@@ -305,6 +310,11 @@ export class PromptEditor extends LitElement {
 
   private updateDraft(value: string) {
     this.draft = value;
+    // If the user is typing new content while in history navigation, reset the history index
+    // so the next Up-arrow starts fresh from the current text.
+    if (this.historyIndex !== undefined && value !== this.userMessages().at(this.historyIndex)) {
+      this.resetHistoryNavigation();
+    }
     const key = draftStorageKey(this.machineId, this.sessionId);
     if (key !== undefined) saveDraft(key, this.draft);
     const nextInputMode = inputModeForDraft(this.draft);
@@ -361,6 +371,71 @@ export class PromptEditor extends LitElement {
     if (!this.completions.length) return false;
     this.selectedIndex = (this.selectedIndex + delta + this.completions.length) % this.completions.length;
     return true;
+  }
+
+  private cycleHistory(delta: number): boolean {
+    const history = this.userMessages();
+    if (history.length === 0) return false;
+
+    if (this.historyIndex === undefined) {
+      // Starting navigation: save current draft so we can restore it when going Down past index 0.
+      this.historyPreText = this.draft;
+      if (delta < 0) {
+        this.historyIndex = 0;
+      } else {
+        return false; // Can't go down from no-history state
+      }
+    } else {
+      this.historyIndex = this.historyIndex + delta;
+    }
+
+    if (this.historyIndex < 0) {
+      // Went past the most recent message -> restore pre-navigation text
+      this.setEditorText(this.historyPreText);
+      this.historyIndex = undefined;
+      this.historyPreText = "";
+      return true;
+    }
+    if (this.historyIndex >= history.length) {
+      this.historyIndex = history.length - 1;
+      return true;
+    }
+
+    const message = history[this.historyIndex];
+    if (message !== undefined) {
+      this.setEditorText(message);
+    }
+    return true;
+  }
+
+  private userMessages(): string[] {
+    return this.messages
+      .filter((m): m is ChatLine & { role: "user" } => m.role === "user")
+      .map((m) => m.parts
+        .filter((p): p is Extract<ChatPart, { type: "text" }> => p.type === "text")
+        .map((p) => p.text)
+        .join("\n")
+        .trim()
+      )
+      .filter((text) => text !== "")
+      .reverse(); // Most recent first (index 0 = most recent)
+  }
+
+  private setEditorText(text: string): void {
+    const editor = this.editor;
+    if (!editor) return;
+    const current = editor.state.doc.toString();
+    if (current === text) return;
+    editor.dispatch({
+      changes: { from: 0, to: current.length, insert: text },
+      selection: EditorSelection.cursor(text.length),
+    });
+    this.draft = text;
+  }
+
+  private resetHistoryNavigation(): void {
+    this.historyIndex = undefined;
+    this.historyPreText = "";
   }
 
   private closeCompletions(): boolean {
@@ -454,6 +529,8 @@ export class PromptEditor extends LitElement {
   private resetComposer() {
     this.draft = "";
     this.currentInputMode = { kind: "normal" };
+    this.historyIndex = undefined;
+    this.historyPreText = "";
     const key = draftStorageKey(this.machineId, this.sessionId);
     if (key !== undefined) clearDraft(key);
     this.completions = [];
