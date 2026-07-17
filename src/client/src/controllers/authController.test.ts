@@ -43,6 +43,26 @@ describe("AuthController", () => {
     expect(getState().authDialog).toMatchObject({ step: "oauth", inputValue: "https://callback", responding: true });
   });
 
+  it("submits an allowed blank OAuth text response without client-side rejection", async () => {
+    const flow = oauthFlow({
+      prompt: { requestId: "request-1", message: "GitHub Enterprise URL/domain (blank for github.com)", kind: "prompt", promptType: "text", allowEmpty: true },
+    });
+    const respondCalls: string[] = [];
+    const { controller } = createController(
+      { authDialog: { step: "oauth", flow, inputValue: "" } },
+      {
+        respondOAuthFlow: (_flowId, _requestId, value) => {
+          respondCalls.push(value);
+          return Promise.resolve(oauthFlow({ status: "complete" }));
+        },
+      },
+    );
+
+    await controller.respondOAuth();
+
+    expect(respondCalls).toEqual([""]);
+  });
+
   it("resets OAuth prompt input and submit state when the request id changes", async () => {
     const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", kind: "manual" } });
     const { controller, getState } = createController(

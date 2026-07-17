@@ -29,7 +29,7 @@ describe("OAuthLoginFlowService", () => {
     const prompt = state.prompt;
     if (prompt === undefined) throw new Error("Expected prompt");
     expect(state).toMatchObject({ auth: { url: "https://example.test/auth", instructions: "Open it" }, progress: ["Waiting for code"] });
-    expect(prompt).toMatchObject({ message: "Paste code", placeholder: "code", kind: "prompt" });
+    expect(prompt).toMatchObject({ message: "Paste code", placeholder: "code", kind: "prompt", promptType: "text", allowEmpty: true });
 
     const afterRespond = service.respond(state.flowId, prompt.requestId, "abc123");
     expect(afterRespond.prompt).toBeUndefined();
@@ -41,18 +41,103 @@ describe("OAuthLoginFlowService", () => {
     service.dispose();
   });
 
+  it("allows blank text responses for providers that use blank as a default", async () => {
+    let domain: string | undefined;
+    const service = new OAuthLoginFlowService();
+    const state = service.start({
+      providerId: "github-copilot",
+      providerName: "GitHub Copilot",
+      runtime: fakeRuntime(async (_providerId, interaction) => {
+        domain = await interaction.prompt({
+          type: "text",
+          message: "GitHub Enterprise URL/domain (blank for github.com)",
+        });
+      }),
+    });
+
+    const prompt = state.prompt;
+    if (prompt === undefined) throw new Error("Expected text prompt");
+    expect(prompt).toMatchObject({ kind: "prompt", promptType: "text", allowEmpty: true });
+
+    service.respond(state.flowId, prompt.requestId, "");
+    await flushAsyncLogin();
+
+    expect(domain).toBe("");
+    expect(service.get(state.flowId).status).toBe("complete");
+    service.dispose();
+  });
+
+  it("preserves secret prompt semantics behind the legacy prompt kind", () => {
+    const service = new OAuthLoginFlowService();
+    const state = service.start({
+      providerId: "test-provider",
+      providerName: "Test Provider",
+      runtime: fakeRuntime(async (_providerId, interaction) => {
+        await interaction.prompt({ type: "secret", message: "Enter secret", placeholder: "token" });
+      }),
+    });
+
+    const prompt = state.prompt;
+    if (prompt === undefined) throw new Error("Expected secret prompt");
+    expect(prompt).toMatchObject({
+      kind: "prompt",
+      promptType: "secret",
+      message: "Enter secret",
+      placeholder: "token",
+    });
+    expect(prompt).not.toHaveProperty("allowEmpty");
+    expect(() => { service.respond(state.flowId, prompt.requestId, ""); }).toThrow("A value is required");
+    service.dispose();
+  });
+
+  it("preserves info-event links without replacing the authorization URL", () => {
+    const service = new OAuthLoginFlowService();
+    const state = service.start({
+      providerId: "test-provider",
+      providerName: "Test Provider",
+      runtime: fakeRuntime(async (_providerId, interaction) => {
+        interaction.notify({ type: "auth_url", url: "https://example.test/login" });
+        interaction.notify({
+          type: "info",
+          message: "Review the provider setup guide",
+          links: [{ url: "https://example.test/docs", label: "Setup guide" }],
+        });
+        await interaction.prompt({ type: "text", message: "Continue" });
+      }),
+    });
+
+    expect(state).toMatchObject({
+      auth: { url: "https://example.test/login" },
+      progress: ["Review the provider setup guide"],
+      info: [{ message: "Review the provider setup guide", links: [{ url: "https://example.test/docs", label: "Setup guide" }] }],
+    });
+    service.dispose();
+  });
+
   it("surfaces device-code events through the auth field", () => {
     const service = new OAuthLoginFlowService();
     const state = service.start({
       providerId: "test-provider",
       providerName: "Test Provider",
       runtime: fakeRuntime(async (_providerId, interaction) => {
-        interaction.notify({ type: "device_code", userCode: "WXYZ-1234", verificationUri: "https://example.test/device" });
+        interaction.notify({
+          type: "device_code",
+          userCode: "WXYZ-1234",
+          verificationUri: "https://example.test/device",
+          intervalSeconds: 5,
+          expiresInSeconds: 900,
+        });
         await interaction.prompt({ type: "text", message: "Waiting" });
       }),
     });
 
-    expect(service.get(state.flowId)).toMatchObject({ auth: { url: "https://example.test/device", instructions: "Enter code: WXYZ-1234" } });
+    expect(service.get(state.flowId)).toMatchObject({
+      auth: {
+        url: "https://example.test/device",
+        instructions: "Enter code: WXYZ-1234",
+        deviceCode: { userCode: "WXYZ-1234", intervalSeconds: 5, expiresInSeconds: 900 },
+      },
+    });
     service.dispose();
   });
 
@@ -66,14 +151,14 @@ describe("OAuthLoginFlowService", () => {
         selectedValue = await interaction.prompt({
           type: "select",
           message: "Choose account",
-          options: [{ id: "work", label: "Work" }, { id: "personal", label: "Personal" }],
+          options: [{ id: "work", label: "Work", description: "Company account" }, { id: "personal", label: "Personal" }],
         });
       }),
     });
 
     const select = state.select;
     if (select === undefined) throw new Error("Expected select prompt");
-    expect(select).toMatchObject({ message: "Choose account", options: [{ value: "work", label: "Work" }, { value: "personal", label: "Personal" }] });
+    expect(select).toMatchObject({ message: "Choose account", options: [{ value: "work", label: "Work", description: "Company account" }, { value: "personal", label: "Personal" }] });
 
     service.respond(state.flowId, select.requestId, "personal");
     await flushAsyncLogin();
@@ -83,25 +168,53 @@ describe("OAuthLoginFlowService", () => {
     service.dispose();
   });
 
-  it("uses a manual-code prompt for callback-server flows", async () => {
-    let manualValue: string | undefined;
+  it("rejects responses outside the pending select options", () => {
     const service = new OAuthLoginFlowService();
     const state = service.start({
       providerId: "test-provider",
       providerName: "Test Provider",
       runtime: fakeRuntime(async (_providerId, interaction) => {
-        manualValue = await interaction.prompt({ type: "manual_code", message: "Paste the callback URL or authorization code" });
+        await interaction.prompt({
+          type: "select",
+          message: "Choose account",
+          options: [{ id: "work", label: "Work" }],
+        });
+      }),
+    });
+
+    const select = state.select;
+    if (select === undefined) throw new Error("Expected select prompt");
+    expect(() => { service.respond(state.flowId, select.requestId, "personal"); }).toThrow("Invalid OAuth selection");
+    expect(service.get(state.flowId).select).toEqual(select);
+    service.dispose();
+  });
+
+  it("uses a manual-code prompt for callback-server flows and cleans up its abort listener", async () => {
+    let manualValue: string | undefined;
+    const service = new OAuthLoginFlowService();
+    const controller = new AbortController();
+    const removeAbortListener = vi.spyOn(controller.signal, "removeEventListener");
+    const state = service.start({
+      providerId: "test-provider",
+      providerName: "Test Provider",
+      runtime: fakeRuntime(async (_providerId, interaction) => {
+        manualValue = await interaction.prompt({
+          type: "manual_code",
+          message: "Paste the callback URL or authorization code",
+          signal: controller.signal,
+        });
       }),
     });
 
     const prompt = state.prompt;
     if (prompt === undefined) throw new Error("Expected manual prompt");
-    expect(prompt).toMatchObject({ kind: "manual", message: "Paste the callback URL or authorization code" });
+    expect(prompt).toMatchObject({ kind: "manual", promptType: "manual_code", message: "Paste the callback URL or authorization code" });
 
     service.respond(state.flowId, prompt.requestId, "https://localhost/callback?code=abc");
     await flushAsyncLogin();
 
     expect(manualValue).toBe("https://localhost/callback?code=abc");
+    expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
     expect(service.get(state.flowId).status).toBe("complete");
     service.dispose();
   });
@@ -110,6 +223,7 @@ describe("OAuthLoginFlowService", () => {
     const promptRejected = deferred<Error>();
     const service = new OAuthLoginFlowService();
     const controller = new AbortController();
+    const removeAbortListener = vi.spyOn(controller.signal, "removeEventListener");
     const state = service.start({
       providerId: "test-provider",
       providerName: "Test Provider",
@@ -128,6 +242,7 @@ describe("OAuthLoginFlowService", () => {
     expect(state.prompt).toMatchObject({ kind: "manual" });
     controller.abort();
     await expect(promptRejected.promise).resolves.toMatchObject({ message: "Prompt cancelled" });
+    expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
 
     const afterAbort = service.get(state.flowId);
     expect(afterAbort.status).toBe("running");
