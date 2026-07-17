@@ -242,8 +242,6 @@ export function findOptionalTemplateEventHandlerNearMarker<E extends Event = Eve
  *
  * Use when the marker is not the handler's own attribute but a stable anchor
  * that precedes it (e.g. a `send-button` id whose `@click=` handler follows).
- *
- * @public
  */
 export function templateEventHandlerAfterMarker<E extends Event = Event>(template: TemplateResult, marker: string): TemplateEventHandler<E> {
   const handler = findOptionalTemplateEventHandlerAfterMarker<E>(template, marker);
@@ -331,8 +329,6 @@ export function findOptionalTemplateEventHandlerAfterValue<E extends Event = Eve
  *
  * Anchors wiring to user-facing row/label text (e.g. a file name) rather than
  * incidental handler order.
- *
- * @public
  */
 export function templateClickHandlerForText<E extends Event = Event>(template: TemplateResult, text: string, clickMarker = "@click"): TemplateEventHandler<E> {
   const handler = findOptionalTemplateClickHandlerForText<E>(template, text, clickMarker);
