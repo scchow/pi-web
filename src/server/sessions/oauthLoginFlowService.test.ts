@@ -1,9 +1,9 @@
-import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai";
-import type { AuthStorage } from "@earendil-works/pi-coding-agent";
+import type { AuthInteraction } from "@earendil-works/pi-ai";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OAuthLoginFlowService } from "./oauthLoginFlowService.js";
 
-type LoginHandler = (providerId: string, callbacks: OAuthLoginCallbacks) => Promise<void>;
+type LoginHandler = (providerId: string, interaction: AuthInteraction) => Promise<void>;
 
 afterEach(() => {
   vi.useRealTimers();
@@ -17,18 +17,18 @@ describe("OAuthLoginFlowService", () => {
     const state = service.start({
       providerId: "test-provider",
       providerName: "Test Provider",
-      authStorage: fakeAuthStorage(async (_providerId, callbacks) => {
-        callbacks.onAuth({ url: "https://example.test/auth", instructions: "Open it" });
-        callbacks.onProgress?.("Waiting for code");
-        promptValue = await callbacks.onPrompt({ message: "Paste code", placeholder: "code" });
-        callbacks.onProgress?.(`Got ${promptValue}`);
+      runtime: fakeRuntime(async (_providerId, interaction) => {
+        interaction.notify({ type: "auth_url", url: "https://example.test/auth", instructions: "Open it" });
+        interaction.notify({ type: "progress", message: "Waiting for code" });
+        promptValue = await interaction.prompt({ type: "text", message: "Paste code", placeholder: "code" });
+        interaction.notify({ type: "progress", message: `Got ${promptValue}` });
       }),
       onComplete,
     });
 
     const prompt = state.prompt;
     if (prompt === undefined) throw new Error("Expected prompt");
-    expect(state).toMatchObject({ auth: { url: "https://example.test/auth" }, progress: ["Waiting for code"] });
+    expect(state).toMatchObject({ auth: { url: "https://example.test/auth", instructions: "Open it" }, progress: ["Waiting for code"] });
     expect(prompt).toMatchObject({ message: "Paste code", placeholder: "code", kind: "prompt" });
 
     const afterRespond = service.respond(state.flowId, prompt.requestId, "abc123");
@@ -41,14 +41,30 @@ describe("OAuthLoginFlowService", () => {
     service.dispose();
   });
 
+  it("surfaces device-code events through the auth field", () => {
+    const service = new OAuthLoginFlowService();
+    const state = service.start({
+      providerId: "test-provider",
+      providerName: "Test Provider",
+      runtime: fakeRuntime(async (_providerId, interaction) => {
+        interaction.notify({ type: "device_code", userCode: "WXYZ-1234", verificationUri: "https://example.test/device" });
+        await interaction.prompt({ type: "text", message: "Waiting" });
+      }),
+    });
+
+    expect(service.get(state.flowId)).toMatchObject({ auth: { url: "https://example.test/device", instructions: "Enter code: WXYZ-1234" } });
+    service.dispose();
+  });
+
   it("round-trips select responses", async () => {
     let selectedValue: string | undefined;
     const service = new OAuthLoginFlowService();
     const state = service.start({
       providerId: "test-provider",
       providerName: "Test Provider",
-      authStorage: fakeAuthStorage(async (_providerId, callbacks) => {
-        selectedValue = await callbacks.onSelect({
+      runtime: fakeRuntime(async (_providerId, interaction) => {
+        selectedValue = await interaction.prompt({
+          type: "select",
           message: "Choose account",
           options: [{ id: "work", label: "Work" }, { id: "personal", label: "Personal" }],
         });
@@ -73,10 +89,8 @@ describe("OAuthLoginFlowService", () => {
     const state = service.start({
       providerId: "test-provider",
       providerName: "Test Provider",
-      authStorage: fakeAuthStorage(async (_providerId, callbacks) => {
-        const manualCodeInput = callbacks.onManualCodeInput;
-        if (manualCodeInput === undefined) throw new Error("Expected manual-code callback");
-        manualValue = await manualCodeInput();
+      runtime: fakeRuntime(async (_providerId, interaction) => {
+        manualValue = await interaction.prompt({ type: "manual_code", message: "Paste the callback URL or authorization code" });
       }),
     });
 
@@ -92,15 +106,44 @@ describe("OAuthLoginFlowService", () => {
     service.dispose();
   });
 
+  it("rejects a pending prompt when its own signal aborts without ending the flow", async () => {
+    const promptRejected = deferred<Error>();
+    const service = new OAuthLoginFlowService();
+    const controller = new AbortController();
+    const state = service.start({
+      providerId: "test-provider",
+      providerName: "Test Provider",
+      runtime: fakeRuntime(async (_providerId, interaction) => {
+        try {
+          await interaction.prompt({ type: "manual_code", message: "Paste code", signal: controller.signal });
+        } catch (error) {
+          promptRejected.resolve(toError(error));
+        }
+        // The flow keeps running (e.g. the callback server resolves it) until we
+        // resolve the follow-up prompt below.
+        await interaction.prompt({ type: "text", message: "Waiting for callback" });
+      }),
+    });
+
+    expect(state.prompt).toMatchObject({ kind: "manual" });
+    controller.abort();
+    await expect(promptRejected.promise).resolves.toMatchObject({ message: "Prompt cancelled" });
+
+    const afterAbort = service.get(state.flowId);
+    expect(afterAbort.status).toBe("running");
+    expect(afterAbort.prompt).toMatchObject({ kind: "prompt", message: "Waiting for callback" });
+    service.dispose();
+  });
+
   it("rejects pending prompts when cancelled", async () => {
     const promptRejected = deferred<Error>();
     const service = new OAuthLoginFlowService();
     const state = service.start({
       providerId: "test-provider",
       providerName: "Test Provider",
-      authStorage: fakeAuthStorage(async (_providerId, callbacks) => {
+      runtime: fakeRuntime(async (_providerId, interaction) => {
         try {
-          await callbacks.onPrompt({ message: "Paste code" });
+          await interaction.prompt({ type: "text", message: "Paste code" });
         } catch (error) {
           promptRejected.resolve(toError(error));
           throw error;
@@ -122,9 +165,9 @@ describe("OAuthLoginFlowService", () => {
     const state = service.start({
       providerId: "test-provider",
       providerName: "Test Provider",
-      authStorage: fakeAuthStorage(async (_providerId, callbacks) => {
+      runtime: fakeRuntime(async (_providerId, interaction) => {
         try {
-          await callbacks.onPrompt({ message: "Paste code" });
+          await interaction.prompt({ type: "text", message: "Paste code" });
         } catch (error) {
           promptRejected.resolve(toError(error));
           throw error;
@@ -145,8 +188,8 @@ describe("OAuthLoginFlowService", () => {
     const state = service.start({
       providerId: "test-provider",
       providerName: "Test Provider",
-      authStorage: fakeAuthStorage(async (_providerId, callbacks) => {
-        await callbacks.onPrompt({ message: "Paste code" });
+      runtime: fakeRuntime(async (_providerId, interaction) => {
+        await interaction.prompt({ type: "text", message: "Paste code" });
       }),
     });
 
@@ -165,9 +208,9 @@ describe("OAuthLoginFlowService", () => {
     const state = service.start({
       providerId: "test-provider",
       providerName: "Test Provider",
-      authStorage: fakeAuthStorage(async (_providerId, callbacks) => {
+      runtime: fakeRuntime(async (_providerId, interaction) => {
         try {
-          await callbacks.onPrompt({ message: "Paste code" });
+          await interaction.prompt({ type: "text", message: "Paste code" });
         } catch (error) {
           promptRejected.resolve(toError(error));
           throw error;
@@ -187,8 +230,10 @@ describe("OAuthLoginFlowService", () => {
   });
 });
 
-function fakeAuthStorage(login: LoginHandler): Pick<AuthStorage, "login"> {
-  return { login };
+function fakeRuntime(login: LoginHandler): Pick<ModelRuntime, "login"> {
+  return {
+    login: (providerId, _type, interaction) => login(providerId, interaction).then(() => ({ type: "oauth", refresh: "r", access: "a", expires: 0 })),
+  };
 }
 
 async function flushAsyncLogin(): Promise<void> {

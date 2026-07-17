@@ -1,15 +1,16 @@
 import crypto from "node:crypto";
-import type { OAuthLoginCallbacks, OAuthSelectPrompt, OAuthPrompt } from "@earendil-works/pi-ai";
-import type { AuthStorage } from "@earendil-works/pi-coding-agent";
+import type { AuthEvent, AuthInteraction, AuthPrompt } from "@earendil-works/pi-ai";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { CommandOption, OAuthFlowState } from "../../shared/apiTypes.js";
 
-type OAuthLoginStorage = Pick<AuthStorage, "login">;
+/** The single runtime capability this service drives — narrowed for testable DI. */
+type OAuthLoginRuntime = Pick<ModelRuntime, "login">;
 type TimerHandle = ReturnType<typeof setTimeout>;
 
 interface PendingOAuthRequest {
   requestId: string;
   allowEmpty: boolean;
-  resolve: (value: string | undefined) => void;
+  resolve: (value: string) => void;
   reject: (error: Error) => void;
 }
 
@@ -46,7 +47,7 @@ export class OAuthLoginFlowService {
   start(options: {
     providerId: string;
     providerName: string;
-    authStorage: OAuthLoginStorage;
+    runtime: OAuthLoginRuntime;
     onComplete?: () => void;
   }): OAuthFlowState {
     const flowId = crypto.randomUUID();
@@ -66,28 +67,16 @@ export class OAuthLoginFlowService {
     this.flows.set(flowId, record);
     this.scheduleRunningExpiry(record);
 
-    const callbacks: OAuthLoginCallbacks = {
+    // Adapt the pi-ai AuthInteraction contract onto the web-UI flow state:
+    // `prompt()` returns the entered/selected string; `notify()` surfaces
+    // out-of-band login events (auth URL, device code, progress).
+    const interaction: AuthInteraction = {
       signal: abort.signal,
-      onAuth: (info) => {
-        if (!this.isCurrentRunning(record)) return;
-        this.updateState(record, { ...record.state, auth: info });
-      },
-      // Device-code flows have no redirect URL; reuse the auth field so the web UI
-      // shows the verification link and user code without a dedicated API shape.
-      onDeviceCode: (info) => {
-        if (!this.isCurrentRunning(record)) return;
-        this.updateState(record, { ...record.state, auth: { url: info.verificationUri, instructions: `Enter code: ${info.userCode}` } });
-      },
-      onPrompt: (prompt) => this.waitForPrompt(record, prompt, "prompt"),
-      onManualCodeInput: () => this.waitForPrompt(record, { message: "Paste the callback URL or authorization code", allowEmpty: false }, "manual"),
-      onSelect: (prompt) => this.waitForSelect(record, prompt),
-      onProgress: (message) => {
-        if (!this.isCurrentRunning(record)) return;
-        this.updateState(record, { ...record.state, progress: [...record.state.progress, message] });
-      },
+      prompt: (prompt) => this.handlePrompt(record, prompt),
+      notify: (event) => { this.handleEvent(record, event); },
     };
 
-    void options.authStorage.login(options.providerId, callbacks)
+    void options.runtime.login(options.providerId, "oauth", interaction)
       .then(() => {
         if (!this.isCurrentRunning(record)) return;
         record.pending = undefined;
@@ -147,14 +136,51 @@ export class OAuthLoginFlowService {
     this.flows.clear();
   }
 
-  private waitForPrompt(record: OAuthFlowRecord, prompt: OAuthPrompt, kind: "prompt" | "manual"): Promise<string> {
+  private handlePrompt(record: OAuthFlowRecord, prompt: AuthPrompt): Promise<string> {
+    if (prompt.type === "select") {
+      return this.waitForSelect(record, prompt.message, prompt.options, prompt.signal);
+    }
+    // `manual_code` is the paste-back path for callback-server flows; text/secret
+    // are ordinary interactive entry. Both map to the single web-UI prompt shape.
+    const kind = prompt.type === "manual_code" ? "manual" : "prompt";
+    return this.waitForPrompt(record, {
+      message: prompt.message,
+      ...(prompt.placeholder === undefined ? {} : { placeholder: prompt.placeholder }),
+      ...(prompt.signal === undefined ? {} : { signal: prompt.signal }),
+    }, kind);
+  }
+
+  private handleEvent(record: OAuthFlowRecord, event: AuthEvent): void {
+    if (!this.isCurrentRunning(record)) return;
+    switch (event.type) {
+      case "auth_url":
+        this.updateState(record, { ...record.state, auth: { url: event.url, ...(event.instructions === undefined ? {} : { instructions: event.instructions }) } });
+        return;
+      // Device-code flows have no redirect URL; reuse the auth field so the web UI
+      // shows the verification link and user code without a dedicated API shape.
+      case "device_code":
+        this.updateState(record, { ...record.state, auth: { url: event.verificationUri, instructions: `Enter code: ${event.userCode}` } });
+        return;
+      case "info":
+      case "progress":
+        this.updateState(record, { ...record.state, progress: [...record.state.progress, event.message] });
+        return;
+    }
+  }
+
+  private waitForPrompt(record: OAuthFlowRecord, prompt: { message: string; placeholder?: string; signal?: AbortSignal }, kind: "prompt" | "manual"): Promise<string> {
     return new Promise((resolve, reject) => {
       if (!this.isCurrentRunning(record)) {
         reject(new Error("Login cancelled"));
         return;
       }
+      if (prompt.signal?.aborted === true) {
+        reject(new Error("Prompt cancelled"));
+        return;
+      }
       const requestId = crypto.randomUUID();
-      record.pending = { requestId, allowEmpty: prompt.allowEmpty === true, resolve: (value) => { resolve(value ?? ""); }, reject };
+      record.pending = { requestId, allowEmpty: false, resolve, reject };
+      this.bindPromptSignal(record, requestId, prompt.signal);
       const base = withoutInteraction(record.state);
       this.updateState(record, {
         ...base,
@@ -163,24 +189,42 @@ export class OAuthLoginFlowService {
           message: prompt.message,
           kind,
           ...(prompt.placeholder === undefined ? {} : { placeholder: prompt.placeholder }),
-          ...(prompt.allowEmpty === true ? { allowEmpty: true } : {}),
         },
       });
     });
   }
 
-  private waitForSelect(record: OAuthFlowRecord, prompt: OAuthSelectPrompt): Promise<string | undefined> {
+  private waitForSelect(record: OAuthFlowRecord, message: string, promptOptions: readonly { id: string; label: string; description?: string }[], signal?: AbortSignal): Promise<string> {
     return new Promise((resolve, reject) => {
       if (!this.isCurrentRunning(record)) {
         reject(new Error("Login cancelled"));
         return;
       }
+      if (signal?.aborted === true) {
+        reject(new Error("Prompt cancelled"));
+        return;
+      }
       const requestId = crypto.randomUUID();
-      const options: CommandOption[] = prompt.options.map((option) => ({ value: option.id, label: option.label }));
+      const options: CommandOption[] = promptOptions.map((option) => ({ value: option.id, label: option.label }));
       record.pending = { requestId, allowEmpty: true, resolve, reject };
+      this.bindPromptSignal(record, requestId, signal);
       const base = withoutInteraction(record.state);
-      this.updateState(record, { ...base, select: { requestId, message: prompt.message, options } });
+      this.updateState(record, { ...base, select: { requestId, message, options } });
     });
+  }
+
+  // A prompt may carry its own AbortSignal (e.g. a manual_code prompt raced
+  // against a callback server). When it fires, drop just that pending request
+  // and clear the interaction from state — the overall login keeps running.
+  private bindPromptSignal(record: OAuthFlowRecord, requestId: string, signal?: AbortSignal): void {
+    if (signal === undefined) return;
+    signal.addEventListener("abort", () => {
+      const pending = record.pending;
+      if (pending?.requestId !== requestId) return;
+      record.pending = undefined;
+      if (this.isCurrentRunning(record)) this.updateState(record, withoutInteraction(record.state));
+      pending.reject(new Error("Prompt cancelled"));
+    }, { once: true });
   }
 
   private isCurrentRunning(record: OAuthFlowRecord): boolean {
