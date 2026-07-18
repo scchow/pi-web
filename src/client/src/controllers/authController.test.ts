@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { api as defaultApi, type AuthProviderOption, type OAuthFlowState, type SessionInfo, type SessionStatus } from "../api";
 import { initialAppState, type AppState } from "../appState";
 import { AuthController, parseAuthSlashCommand } from "./authController";
@@ -134,6 +134,108 @@ describe("AuthController", () => {
     });
   });
 
+  it("does not recreate an OAuth dialog when a pending response settles during cancellation", async () => {
+    const prompt = { requestId: "request-1", message: "Paste callback", kind: "manual" } as const;
+    const flow = oauthFlow({ prompt });
+    const response = deferred<OAuthFlowState>();
+    const cancellation = deferred<OAuthFlowState>();
+    const { controller, getState } = createController(
+      { authDialog: { step: "oauth", flow, inputValue: "https://callback" } },
+      {
+        respondOAuthFlow: () => response.promise,
+        cancelOAuthFlow: () => cancellation.promise,
+      },
+    );
+
+    const responsePending = controller.respondOAuth();
+    const cancellationPending = controller.cancelOAuth();
+    const dialogAfterCancel = getState().authDialog;
+
+    response.resolve(oauthFlow({ prompt, progress: ["Stale response"] }));
+    await responsePending;
+    const dialogAfterResponse = getState().authDialog;
+
+    cancellation.resolve(oauthFlow({ status: "cancelled" }));
+    await cancellationPending;
+
+    expect(dialogAfterCancel).toBeUndefined();
+    expect(dialogAfterResponse).toBeUndefined();
+    expect(getState().authDialog).toBeUndefined();
+  });
+
+  it("does not let a stale OAuth response overwrite a newer flow", async () => {
+    vi.stubGlobal("window", { setInterval: () => 1, clearInterval: () => undefined });
+    const oldPrompt = { requestId: "request-1", message: "Paste callback", kind: "manual" } as const;
+    const oldFlow = oauthFlow({ prompt: oldPrompt });
+    const newFlow = oauthFlow({ flowId: "flow-2", prompt: { requestId: "request-2", message: "Paste callback", kind: "manual" } });
+    const response = deferred<OAuthFlowState>();
+    const providers = [authProvider("anthropic", "oauth")];
+    const { controller, getState } = createController(
+      { authDialog: { step: "oauth", flow: oldFlow, inputValue: "https://old-callback" } },
+      {
+        respondOAuthFlow: () => response.promise,
+        authProviders: () => Promise.resolve({ providers }),
+        startOAuthLogin: () => Promise.resolve(newFlow),
+      },
+    );
+
+    try {
+      const responsePending = controller.respondOAuth();
+      await controller.openLogin("anthropic");
+      const dialogAfterNewFlow = getState().authDialog;
+
+      response.resolve(oauthFlow({ prompt: oldPrompt, progress: ["Stale response"] }));
+      await responsePending;
+
+      expect(dialogAfterNewFlow).toMatchObject({ step: "oauth", flow: { flowId: "flow-2" } });
+      expect(getState().authDialog).toMatchObject({ step: "oauth", flow: { flowId: "flow-2" } });
+    } finally {
+      response.resolve(oldFlow);
+      controller.dispose();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not let an older poll restore a running flow after a newer poll stops polling", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("window", { setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval });
+    const prompt = { requestId: "request-1", message: "Paste callback", kind: "manual" } as const;
+    const runningFlow = oauthFlow({ prompt });
+    const stalePoll = deferred<OAuthFlowState>();
+    const providers = [authProvider("anthropic", "oauth")];
+    let pollCalls = 0;
+    const { controller, getState } = createController(
+      {},
+      {
+        authProviders: () => Promise.resolve({ providers }),
+        startOAuthLogin: () => Promise.resolve(runningFlow),
+        oauthFlow: () => {
+          pollCalls += 1;
+          return pollCalls === 1 ? stalePoll.promise : Promise.resolve(oauthFlow({ status: "cancelled", prompt }));
+        },
+      },
+    );
+
+    try {
+      await controller.openLogin("anthropic");
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(1000);
+      const dialogAfterPollingStopped = getState().authDialog;
+
+      stalePoll.resolve(oauthFlow({ prompt, progress: ["Stale running poll"] }));
+      await flushMicrotasks();
+
+      expect(pollCalls).toBe(2);
+      expect(dialogAfterPollingStopped).toMatchObject({ step: "oauth", flow: { status: "cancelled" } });
+      expect(getState().authDialog).toMatchObject({ step: "oauth", flow: { status: "cancelled" } });
+    } finally {
+      stalePoll.resolve(runningFlow);
+      controller.dispose();
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it("cancels the active OAuth flow and closes the dialog even when cancellation fails", async () => {
     const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", kind: "manual" } });
     const cancelCalls: { flowId: string; machineId: string | undefined }[] = [];
@@ -244,6 +346,13 @@ function createController(
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolveDeferred: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve) => { resolveDeferred = resolve; });
+  if (resolveDeferred === undefined) throw new Error("Deferred promise was not initialized");
+  return { promise, resolve: resolveDeferred };
 }
 
 function remoteMachine(id: string): NonNullable<AppState["selectedMachine"]> {
