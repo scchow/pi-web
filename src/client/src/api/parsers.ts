@@ -836,6 +836,7 @@ function parsePiWebConfigValues(value: unknown): PiWebConfigValues {
     ...optionalField("uploads", optionalUploads(record["uploads"])),
     ...optionalField("maxUploadBytes", optionalNumber(record, "maxUploadBytes")),
     ...optionalField("agent", optionalAgent(record["agent"])),
+    ...optionalField("display", optionalDisplay(record["display"])),
     ...optionalField("spawnSessions", optionalBoolean(record, "spawnSessions")),
     ...optionalField("subsessions", optionalBoolean(record, "subsessions")),
   };
@@ -847,6 +848,15 @@ function optionalAgent(value: unknown): PiWebConfigValues["agent"] | undefined {
   return {
     ...optionalField("command", optionalString(value, "command")),
     ...optionalField("dir", optionalString(value, "dir")),
+  };
+}
+
+function optionalDisplay(value: unknown): PiWebConfigValues["display"] | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || Array.isArray(value)) throw new Error("Invalid PI WEB display field");
+  return {
+    ...optionalField("defaultThinkingTabOpen", optionalBoolean(value, "defaultThinkingTabOpen")),
+    ...optionalField("defaultToolCallTabOpen", optionalBoolean(value, "defaultToolCallTabOpen")),
   };
 }
 

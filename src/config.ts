@@ -179,6 +179,7 @@ export function savePiWebConfig(config: PiWebConfig, options: LoadOptions = {}):
   delete existing["spawnSessions"];
   delete existing["subsessions"];
   delete existing["agent"];
+  delete existing["display"];
   const merged = { ...existing, ...piWebConfigRecord(normalized) };
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(merged, null, 2)}\n`, "utf8");
@@ -205,6 +206,7 @@ function piWebConfigRecord(config: PiWebConfig): Record<string, unknown> {
     ...(config.spawnSessions !== undefined ? { spawnSessions: config.spawnSessions } : {}),
     ...(config.subsessions !== undefined ? { subsessions: config.subsessions } : {}),
     ...(config.agent !== undefined ? { agent: config.agent } : {}),
+    ...(config.display !== undefined ? { display: config.display } : {}),
   };
 }
 
@@ -221,6 +223,7 @@ function parsePiWebConfig(value: Record<string, unknown>, path: string): PiWebCo
     ...(value["spawnSessions"] !== undefined ? { spawnSessions: parseSpawnSessions(value["spawnSessions"], path) } : {}),
     ...(value["subsessions"] !== undefined ? { subsessions: parseSubsessions(value["subsessions"], path) } : {}),
     ...(value["agent"] !== undefined ? { agent: parseAgentConfig(value["agent"], path) } : {}),
+    ...(value["display"] !== undefined ? { display: parseDisplayConfig(value["display"], path) } : {}),
   };
 }
 
@@ -377,6 +380,23 @@ export function parseUploadsConfig(value: unknown, path: string): NonNullable<Pi
   return {
     ...(defaultFolder !== undefined ? { defaultFolder: parseWorkspaceRelativeFolder(defaultFolder, "uploads.defaultFolder", path) } : {}),
   };
+}
+
+export function parseDisplayConfig(value: unknown, path: string): NonNullable<PiWebConfigValues["display"]> {
+  if (!isRecord(value)) throw new Error(`PI WEB config display must be an object: ${path}`);
+  const unknownKey = Object.keys(value).find((key) => !DISPLAY_CONFIG_KEYS.has(key));
+  if (unknownKey !== undefined) throw new Error(`PI WEB config display contains unknown key ${JSON.stringify(unknownKey)}: ${path}`);
+  return {
+    ...(value["defaultThinkingTabOpen"] !== undefined ? { defaultThinkingTabOpen: parseBoolean(value["defaultThinkingTabOpen"], "display.defaultThinkingTabOpen", path) } : {}),
+    ...(value["defaultToolCallTabOpen"] !== undefined ? { defaultToolCallTabOpen: parseBoolean(value["defaultToolCallTabOpen"], "display.defaultToolCallTabOpen", path) } : {}),
+  };
+}
+
+const DISPLAY_CONFIG_KEYS = new Set(["defaultThinkingTabOpen", "defaultToolCallTabOpen"]);
+
+function parseBoolean(value: unknown, key: string, path: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`PI WEB config ${key} must be a boolean: ${path}`);
+  return value;
 }
 
 function parseWorkspaceRelativeFolder(value: unknown, key: string, path: string): string {

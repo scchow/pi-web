@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { agentDirEnvSource, hasAgentDirEnvOverride, hasAgentSessionDirEnvOverride, loadPiWebConfig, parseAgentConfig, parseUploadsConfig, resolveEffectivePiWebConfig, savePiWebConfig, type AgentPathHost, type LoadOptions, type PiWebConfig } from "../config.js";
+import { agentDirEnvSource, hasAgentDirEnvOverride, hasAgentSessionDirEnvOverride, loadPiWebConfig, parseAgentConfig, parseDisplayConfig, parseUploadsConfig, resolveEffectivePiWebConfig, savePiWebConfig, type AgentPathHost, type LoadOptions, type PiWebConfig } from "../config.js";
 import type { PiWebAgentDirEnvSource, PiWebConfigEnvOverrides, PiWebConfigResponse, PiWebConfigValues } from "../shared/apiTypes.js";
 import { isPiWebPluginId } from "../shared/pluginIds.js";
 
@@ -132,6 +132,7 @@ function parseConfigRequest(value: unknown, agentPathHost: AgentPathHost = "curr
   const spawnSessions = value["spawnSessions"];
   const subsessions = value["subsessions"];
   const agent = value["agent"];
+  const display = value["display"];
   if (host !== undefined) {
     if (typeof host !== "string") throw new Error("PI WEB config host must be a string");
     config.host = host;
@@ -155,6 +156,7 @@ function parseConfigRequest(value: unknown, agentPathHost: AgentPathHost = "curr
     config.subsessions = subsessions;
   }
   if (agent !== undefined) config.agent = parseAgentRequest(agent, agentPathHost);
+  if (display !== undefined) config.display = parseDisplayConfig(display, "request");
   return config;
 }
 

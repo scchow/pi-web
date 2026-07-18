@@ -1,6 +1,6 @@
 import { css, html, LitElement, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { DEFAULT_WORKSPACE_UPLOADS_FOLDER, type PiWebConfigEnvOverrides, type PiWebConfigResponse, type PiWebConfigValues } from "../../api";
+import { DEFAULT_WORKSPACE_UPLOADS_FOLDER, type PiWebConfigEnvOverrides, type PiWebConfigResponse, type PiWebConfigValues, type PiWebDisplayConfig } from "../../api";
 import "./SettingsPanelFrame";
 import type { SettingsNotice } from "./SettingsPanelFrame";
 import {
@@ -16,6 +16,10 @@ import {
 
 function generalDescription(targetLabel: string): TemplateResult {
   return html`Gateway server fields edit this local gateway. File access and upload defaults edit ${targetLabel}.`;
+}
+
+function loadDisplayConfig(config: PiWebConfigValues): PiWebDisplayConfig {
+  return config.display ?? {};
 }
 
 @customElement("settings-general-panel")
@@ -35,12 +39,14 @@ export class SettingsGeneralPanel extends LitElement {
   @property({ attribute: false }) onSaveMachineConfig?: (config: PiWebConfigValues) => void | Promise<void>;
   @state() private gatewayDraft: GatewayServerConfigDraft = emptyGatewayServerConfigDraft();
   @state() private machineDraft: MachineAccessConfigDraft = emptyMachineAccessConfigDraft();
+  @state() private displayDraft: PiWebDisplayConfig = {};
   @state() private gatewayLocalError = "";
   @state() private machineLocalError = "";
 
   protected override willUpdate(changed: PropertyValues<this>): void {
     if (changed.has("configResponse") && this.configResponse !== undefined) {
       this.gatewayDraft = gatewayServerDraftFromConfig(this.configResponse.config);
+      this.displayDraft = loadDisplayConfig(this.configResponse.config);
       this.gatewayLocalError = "";
     }
     if (changed.has("machineConfigResponse") && this.machineConfigResponse !== undefined) {
@@ -62,6 +68,7 @@ export class SettingsGeneralPanel extends LitElement {
         <div class="settings-sections">
           ${this.renderGatewayServerSettings()}
           ${this.renderSelectedMachineAccessSettings()}
+          ${this.renderDisplaySettings()}
         </div>
       </settings-panel-frame>
     `;
@@ -167,6 +174,36 @@ export class SettingsGeneralPanel extends LitElement {
     `;
   }
 
+  private renderDisplaySettings(): TemplateResult {
+    return html`
+      <section class="settings-card" aria-label="Display settings">
+        <div class="card-heading">
+          <h3>Display</h3>
+          <p>Chat view defaults. Saved in the gateway config.</p>
+        </div>
+        <form class="config-form" @submit=${(event: Event) => { void this.saveDisplayConfig(event); }}>
+          <label class="checkbox-field">
+            <input type="checkbox" .checked=${this.displayDraft.defaultThinkingTabOpen !== false} @change=${this.onToggleThinking}>
+            <span>
+              <strong>Default thinking tab open</strong>
+              <small>Expand model thinking blocks by default</small>
+            </span>
+          </label>
+          <label class="checkbox-field">
+            <input type="checkbox" .checked=${this.displayDraft.defaultToolCallTabOpen === true} @change=${this.onToggleToolCalls}>
+            <span>
+              <strong>Default tool call tab open</strong>
+              <small>Expand tool call results by default</small>
+            </span>
+          </label>
+          <footer class="form-actions">
+            <button class="primary" type="submit" ?disabled=${this.loading || this.saving}>${this.saving ? "Saving…" : "Save display config"}</button>
+          </footer>
+        </form>
+      </section>
+    `;
+  }
+
   private panelNotices(): readonly SettingsNotice[] {
     const notices: SettingsNotice[] = [];
     const gatewayError = this.gatewayLocalError || this.error;
@@ -238,6 +275,26 @@ export class SettingsGeneralPanel extends LitElement {
     }
   }
 
+  private async saveDisplayConfig(event: Event): Promise<void> {
+    event.preventDefault();
+    this.gatewayLocalError = "";
+    try {
+      await this.onSave?.({ display: this.displayDraft });
+    } catch (error) {
+      this.gatewayLocalError = errorMessage(error);
+    }
+  }
+
+  private readonly onToggleThinking = (event: Event): void => {
+    const target = event.target;
+    if (target instanceof HTMLInputElement) this.displayDraft = { ...this.displayDraft, defaultThinkingTabOpen: target.checked };
+  };
+
+  private readonly onToggleToolCalls = (event: Event): void => {
+    const target = event.target;
+    if (target instanceof HTMLInputElement) this.displayDraft = { ...this.displayDraft, defaultToolCallTabOpen: target.checked };
+  };
+
   private updateGatewayDraft(patch: Partial<GatewayServerConfigDraft>): void {
     this.gatewayDraft = { ...this.gatewayDraft, ...patch };
     this.gatewayLocalError = "";
@@ -283,6 +340,12 @@ export class SettingsGeneralPanel extends LitElement {
     .muted { color: var(--pi-muted); }
     .form-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 2px; }
     .primary { border-color: var(--pi-accent); background: var(--pi-selection-bg); color: var(--pi-text-bright); }
+    .display-settings { display: grid; gap: 10px; }
+    .checkbox-field { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+    .checkbox-field input[type="checkbox"] { width: 18px; height: 18px; margin-top: 2px; accent-color: var(--pi-accent); cursor: pointer; flex-shrink: 0; }
+    .checkbox-field span { display: grid; gap: 2px; min-width: 0; }
+    .checkbox-field strong { font-size: 13px; line-height: 1.3; }
+    .checkbox-field small { color: var(--pi-muted); font-size: 12px; line-height: 1.4; }
 
     @media (max-width: 760px) {
       .effective-card dl > div { grid-template-columns: minmax(0, 1fr); gap: 3px; }

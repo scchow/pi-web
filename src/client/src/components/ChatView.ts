@@ -2,6 +2,7 @@ import { LitElement, html } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { ChatDisclosureController } from "../chatDisclosure";
+import type { PiWebDisplayConfig } from "../api";
 import { groupChatMessages, summarizeChatGroup, type ChatGroup } from "../chatGroups";
 import { writeClipboardText } from "../clipboard";
 import { capturePrependScrollAnchor, PREPEND_RESTORE_SETTLE_FRAMES, restorePrependScrollAnchor, type PrependScrollAnchor } from "../chatScrollAnchoring";
@@ -200,6 +201,7 @@ export class ChatView extends LitElement {
   @property({ attribute: false }) activity?: SessionActivity;
   @property({ attribute: false }) notificationInbox?: SelectedSessionNotificationView;
   @property({ type: Boolean }) canClearServerQueue = false;
+  @property({ attribute: false }) displayConfig: PiWebDisplayConfig = {};
   @property({ attribute: false }) onClearServerQueue?: () => void;
   @property({ attribute: false }) onDismissWarning?: (dismissId: string) => void;
   @property({ attribute: false }) onDismissNotification?: (notificationId: string) => void;
@@ -257,6 +259,9 @@ export class ChatView extends LitElement {
   private readonly handleClearServerQueue = (): void => {
     this.onClearServerQueue?.();
   };
+  private get _prefs(): PiWebDisplayConfig {
+    return this.displayConfig;
+  }
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -828,7 +833,7 @@ export class ChatView extends LitElement {
   private renderPart(part: ChatPart, message?: ChatLine) {
     if (part.type === "text" && message?.role === "bash") return html`<pre class="part shell-output">${part.text}</pre>`;
     if (part.type === "text") return html`<formatted-text class="part" .text=${part.text}></formatted-text>`;
-    if (part.type === "thinking") return html`<details class="part"><summary>thinking</summary><formatted-text .text=${part.text}></formatted-text></details>`;
+    if (part.type === "thinking") return html`<details class="part" ?open=${this._prefs.defaultThinkingTabOpen !== false}><summary>thinking</summary><formatted-text .text=${part.text}></formatted-text></details>`;
     if (part.type === "skillInvocation") return html`
       <details class="part skill-invocation">
         <summary><b>[skill]</b> ${part.name}</summary>
@@ -849,7 +854,7 @@ export class ChatView extends LitElement {
     if (part.type === "toolCall") return html`<div class="part tool-line">▶ ${part.toolName}<span class="summary">${part.summary}</span></div>`;
     if (part.type === "toolExecution") return html`<tool-execution-view class="part" .execution=${part}></tool-execution-view>`;
     if (part.type === "toolResult") return html`
-      <details class="part" ?open=${part.isError}>
+      <details class="part" ?open=${part.isError || this._prefs.defaultToolCallTabOpen}>
         <summary>${part.isError ? "✖" : "✓"} ${part.toolName} result</summary>
         <formatted-text .text=${part.text}></formatted-text>
       </details>

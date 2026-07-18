@@ -75,6 +75,13 @@ export interface PiWebAgentConfig {
   dir?: string;
 }
 
+export interface PiWebDisplayConfig {
+  /** Whether thinking blocks are expanded by default in the chat view. */
+  defaultThinkingTabOpen?: boolean;
+  /** Whether tool call results are expanded by default in the chat view. */
+  defaultToolCallTabOpen?: boolean;
+}
+
 export interface PiWebConfigValues {
   host?: string;
   port?: number;
@@ -98,6 +105,8 @@ export interface PiWebConfigValues {
   subsessions?: boolean;
   /** Desired Pi-compatible agent profile and companion CLI (Pi by default). */
   agent?: PiWebAgentConfig;
+  /** Chat view display defaults. */
+  display?: PiWebDisplayConfig;
 }
 
 export type PiWebPluginScope = "bundled" | "local" | "user" | "project";
