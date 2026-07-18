@@ -62,7 +62,7 @@ describe("AuthController", () => {
   it("keeps OAuth prompt input and submit state across poll refreshes for the same request", async () => {
     const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", kind: "manual" } });
     const { controller, getState } = createController(
-      { authDialog: { step: "oauth", flow, inputValue: "https://callback", responding: true } },
+      { authDialog: { step: "oauth", flow, machineId: "local", inputValue: "https://callback", responding: true } },
       { respondOAuthFlow: () => Promise.resolve(oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", kind: "manual" }, progress: ["Still waiting"] })) },
     );
 
@@ -77,7 +77,7 @@ describe("AuthController", () => {
     });
     const respondCalls: string[] = [];
     const { controller } = createController(
-      { authDialog: { step: "oauth", flow, inputValue: "" } },
+      { authDialog: { step: "oauth", flow, machineId: "local", inputValue: "" } },
       {
         respondOAuthFlow: (_flowId, _requestId, value) => {
           respondCalls.push(value);
@@ -94,7 +94,7 @@ describe("AuthController", () => {
   it("resets OAuth prompt input and submit state when the request id changes", async () => {
     const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", kind: "manual" } });
     const { controller, getState } = createController(
-      { authDialog: { step: "oauth", flow, inputValue: "https://callback", responding: true } },
+      { authDialog: { step: "oauth", flow, machineId: "local", inputValue: "https://callback", responding: true } },
       {
         respondOAuthFlow: () => Promise.resolve(oauthFlow({
           select: { requestId: "request-2", message: "Choose an account", options: [{ value: "acct-1", label: "Account 1" }] },
@@ -121,7 +121,7 @@ describe("AuthController", () => {
     const statusCalls: { session: Parameters<typeof defaultApi.status>[0]; machineId: string | undefined }[] = [];
     const appliedStatuses: SessionStatus[] = [];
     const { controller, getState } = createController(
-      { selectedSession: session, authDialog: { step: "oauth", flow, inputValue: "https://callback" } },
+      { selectedSession: session, authDialog: { step: "oauth", flow, machineId: "local", inputValue: "https://callback" } },
       {
         respondOAuthFlow: (flowId, requestId, value, machineId) => {
           respondCalls.push({ flowId, requestId, value, machineId });
@@ -144,10 +144,73 @@ describe("AuthController", () => {
     expect(appliedStatuses).toEqual([refreshedStatus]);
   });
 
+  it("does not refresh a session from another selected machine when a flow completes", async () => {
+    const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Enter secret", kind: "prompt", promptType: "secret" } });
+    const respondMachines: (string | undefined)[] = [];
+    const statusMachines: (string | undefined)[] = [];
+    const appliedStatuses: SessionStatus[] = [];
+    const { controller } = createController(
+      {
+        selectedMachine: remoteMachine("remote-2"),
+        selectedSession: sessionInfo("session-2"),
+        authDialog: { step: "oauth", flow, machineId: "remote-1", inputValue: "secret-value" },
+      },
+      {
+        respondOAuthFlow: (_flowId, _requestId, _value, machineId) => {
+          respondMachines.push(machineId);
+          return Promise.resolve(oauthFlow({ status: "complete" }));
+        },
+        status: (_session, machineId) => {
+          statusMachines.push(machineId);
+          return Promise.resolve(sessionStatus("session-2"));
+        },
+      },
+      (status) => { appliedStatuses.push(status); },
+    );
+
+    await controller.respondOAuth();
+    await flushMicrotasks();
+
+    expect(respondMachines).toEqual(["remote-1"]);
+    expect(statusMachines).toEqual([]);
+    expect(appliedStatuses).toEqual([]);
+  });
+
+  it("does not apply an auth status refresh after the selected session changes", async () => {
+    const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Enter secret", kind: "prompt", promptType: "secret" } });
+    const originalSession = sessionInfo("session-1");
+    const statusResponse = deferred<SessionStatus>();
+    const statusCalls: { session: Parameters<typeof defaultApi.status>[0]; machineId: string | undefined }[] = [];
+    const appliedStatuses: SessionStatus[] = [];
+    const { controller, setState } = createController(
+      {
+        selectedMachine: remoteMachine("remote-1"),
+        selectedSession: originalSession,
+        authDialog: { step: "oauth", flow, machineId: "remote-1", inputValue: "secret-value" },
+      },
+      {
+        respondOAuthFlow: () => Promise.resolve(oauthFlow({ status: "complete" })),
+        status: (session, machineId) => {
+          statusCalls.push({ session, machineId });
+          return statusResponse.promise;
+        },
+      },
+      (status) => { appliedStatuses.push(status); },
+    );
+
+    await controller.respondOAuth();
+    setState({ selectedMachine: remoteMachine("remote-2"), selectedSession: sessionInfo("session-2") });
+    statusResponse.resolve(sessionStatus(originalSession.id));
+    await flushMicrotasks();
+
+    expect(statusCalls).toEqual([{ session: originalSession, machineId: "remote-1" }]);
+    expect(appliedStatuses).toEqual([]);
+  });
+
   it("leaves the OAuth dialog ready to retry if responding fails", async () => {
     const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", kind: "manual" } });
     const { controller, getState } = createController(
-      { authDialog: { step: "oauth", flow, inputValue: "https://callback", responding: true } },
+      { authDialog: { step: "oauth", flow, machineId: "local", inputValue: "https://callback", responding: true } },
       { respondOAuthFlow: () => Promise.reject(new Error("Invalid callback")) },
     );
 
@@ -168,7 +231,7 @@ describe("AuthController", () => {
     const response = deferred<OAuthFlowState>();
     const cancellation = deferred<OAuthFlowState>();
     const { controller, getState } = createController(
-      { authDialog: { step: "oauth", flow, inputValue: "https://callback" } },
+      { authDialog: { step: "oauth", flow, machineId: "local", inputValue: "https://callback" } },
       {
         respondOAuthFlow: () => response.promise,
         cancelOAuthFlow: () => cancellation.promise,
@@ -191,6 +254,106 @@ describe("AuthController", () => {
     expect(getState().authDialog).toBeUndefined();
   });
 
+  it("best-effort cancels a running flow whose start response arrives after the dialog closes", async () => {
+    const start = deferred<OAuthFlowState>();
+    const provider: AuthProviderOption = { ...authProvider("amazon-bedrock", "api_key"), loginFlow: "interactive" };
+    const cancelCalls: { flowId: string; machineId: string | undefined }[] = [];
+    const { controller, getState } = createController(
+      {
+        selectedMachine: remoteMachine("remote-1"),
+        authDialog: { step: "providers", mode: "login", authType: "api_key", providers: [provider] },
+      },
+      {
+        startInteractiveApiKeyLogin: () => start.promise,
+        cancelOAuthFlow: (flowId, machineId) => {
+          cancelCalls.push({ flowId, machineId });
+          return Promise.reject(new Error("Cancel unavailable"));
+        },
+      },
+    );
+
+    const pendingStart = controller.selectLoginProvider(provider.id, provider.authType);
+    controller.closeDialog();
+    start.resolve(oauthFlow({ flowId: "stale-flow", providerId: provider.id, providerName: provider.name }));
+    await pendingStart;
+
+    expect(cancelCalls).toEqual([{ flowId: "stale-flow", machineId: "remote-1" }]);
+    expect(getState().authDialog).toBeUndefined();
+    expect(getState().error).toBe("");
+  });
+
+  it("keeps prompt responses and cancellation bound to the flow's originating machine", async () => {
+    const prompt = { requestId: "request-1", message: "Enter secret", kind: "prompt", promptType: "secret" } as const;
+    const flow = oauthFlow({ providerId: "amazon-bedrock", prompt });
+    const respondCalls: { value: string; machineId: string | undefined }[] = [];
+    const cancelCalls: { flowId: string; machineId: string | undefined }[] = [];
+    const { controller } = createController(
+      {
+        selectedMachine: remoteMachine("remote-2"),
+        authDialog: { step: "oauth", flow, machineId: "remote-1", inputValue: "secret-value" },
+      },
+      {
+        respondOAuthFlow: (_flowId, _requestId, value, machineId) => {
+          respondCalls.push({ value, machineId });
+          return Promise.resolve(flow);
+        },
+        cancelOAuthFlow: (flowId, machineId) => {
+          cancelCalls.push({ flowId, machineId });
+          return Promise.resolve(oauthFlow({ status: "cancelled" }));
+        },
+      },
+    );
+
+    await controller.respondOAuth();
+    await controller.cancelOAuth();
+
+    expect(respondCalls).toEqual([{ value: "secret-value", machineId: "remote-1" }]);
+    expect(cancelCalls).toEqual([{ flowId: "flow-1", machineId: "remote-1" }]);
+  });
+
+  it("keeps polling bound to the machine where an interactive flow started", async () => {
+    let pollCallback: (() => void) | undefined;
+    vi.stubGlobal("window", {
+      setInterval: (callback: () => void) => {
+        pollCallback = callback;
+        return 1;
+      },
+      clearInterval: () => undefined,
+    });
+    const prompt = { requestId: "request-1", message: "Enter secret", kind: "prompt", promptType: "secret" } as const;
+    const flow = oauthFlow({ providerId: "amazon-bedrock", prompt });
+    const provider: AuthProviderOption = { ...authProvider("amazon-bedrock", "api_key"), loginFlow: "interactive" };
+    const pollMachines: (string | undefined)[] = [];
+    const { controller, getState, setState } = createController(
+      {
+        selectedMachine: remoteMachine("remote-1"),
+        authDialog: { step: "providers", mode: "login", authType: "api_key", providers: [provider] },
+      },
+      {
+        startInteractiveApiKeyLogin: () => Promise.resolve(flow),
+        oauthFlow: (_flowId, machineId) => {
+          pollMachines.push(machineId);
+          return Promise.resolve(flow);
+        },
+      },
+    );
+
+    try {
+      await controller.selectLoginProvider(provider.id, provider.authType);
+      expect(getState().authDialog).toMatchObject({ step: "oauth", machineId: "remote-1" });
+
+      setState({ selectedMachine: remoteMachine("remote-2") });
+      if (pollCallback === undefined) throw new Error("Expected auth polling to start");
+      pollCallback();
+      await flushMicrotasks();
+
+      expect(pollMachines).toEqual(["remote-1"]);
+    } finally {
+      controller.dispose();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("does not let a stale OAuth response overwrite a newer flow", async () => {
     vi.stubGlobal("window", { setInterval: () => 1, clearInterval: () => undefined });
     const oldPrompt = { requestId: "request-1", message: "Paste callback", kind: "manual" } as const;
@@ -199,7 +362,7 @@ describe("AuthController", () => {
     const response = deferred<OAuthFlowState>();
     const providers = [authProvider("anthropic", "oauth")];
     const { controller, getState } = createController(
-      { authDialog: { step: "oauth", flow: oldFlow, inputValue: "https://old-callback" } },
+      { authDialog: { step: "oauth", flow: oldFlow, machineId: "local", inputValue: "https://old-callback" } },
       {
         respondOAuthFlow: () => response.promise,
         authProviders: () => Promise.resolve({ providers }),
@@ -268,7 +431,7 @@ describe("AuthController", () => {
     const flow = oauthFlow({ prompt: { requestId: "request-1", message: "Paste callback", kind: "manual" } });
     const cancelCalls: { flowId: string; machineId: string | undefined }[] = [];
     const { controller, getState } = createController(
-      { authDialog: { step: "oauth", flow } },
+      { authDialog: { step: "oauth", flow, machineId: "local" } },
       {
         cancelOAuthFlow: (flowId, machineId) => {
           cancelCalls.push({ flowId, machineId });
@@ -362,13 +525,14 @@ function createController(
 ) {
   let state: AppState = { ...initialAppState(), ...statePatch };
   const api = { ...defaultApi, ...apiPatch };
+  const setState = (patch: Partial<AppState>) => { state = { ...state, ...patch }; };
   const controller = new AuthController(
     () => state,
-    (patch) => { state = { ...state, ...patch }; },
+    setState,
     applyStatus,
     { api },
   );
-  return { controller, getState: () => state };
+  return { controller, getState: () => state, setState };
 }
 
 async function flushMicrotasks(): Promise<void> {
