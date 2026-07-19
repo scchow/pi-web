@@ -116,6 +116,7 @@ export class AppNavigationPanel extends LitElement {
             .statuses=${this.machineStatuses}
             .activities=${this.machineActivities}
             .notificationBadges=${this.notificationBadges.machines}
+            .notificationHeadingBadge=${this.notificationBadges.machinesHeading}
             .onSelect=${(machine: Machine) => this.onSelectMachine?.(machine)}
             .onRemove=${(machine: Machine) => this.onRemoveMachine?.(machine)}
             .onFocusNextSection=${() => { this.focusNextFrom("machines"); }}

@@ -1,6 +1,6 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { PiSessionService, type PiAgentSession, type PiSessionRuntime } from "./piSessionService.js";
 import { SessionNotificationStore } from "./sessionNotificationStore.js";
@@ -404,8 +404,10 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     const hub = new CapturingSessionEventHub();
     const store = notificationStore();
     const branch = [{ type: "message", message: { role: "user", content: "existing" } }];
+    const canonicalCwd = resolve(tmpdir(), "pi-web-notification-workspace");
+    const rawEquivalentCwd = `${canonicalCwd}${sep}nested${sep}..`;
     const fake = fakeRuntime("notification-session", {
-      sessionManager: fakeSessionManager("/workspace", {
+      sessionManager: fakeSessionManager(rawEquivalentCwd, {
         getSessionId: () => "notification-session",
         getBranch: () => branch,
       }),
@@ -419,12 +421,13 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
       heartbeatIntervalMs: 60_000,
     });
 
-    await service.start("/workspace");
+    await service.start(canonicalCwd);
     const notify = boundNotify(fake);
     notify("duplicate", "warning");
     notify("duplicate", "error");
 
-    const snapshot = service.notificationInbox(sessionRef("notification-session"));
+    const snapshot = service.notificationInbox({ id: "notification-session", cwd: canonicalCwd });
+    expect(snapshot.summary.cwd).toBe(canonicalCwd);
     expect(snapshot.notifications).toMatchObject([
       { id: "daemon-lifecycle-test:2", message: "duplicate", severity: "error" },
       { id: "daemon-lifecycle-test:1", message: "duplicate", severity: "warning" },

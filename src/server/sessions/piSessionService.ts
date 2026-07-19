@@ -1429,10 +1429,7 @@ export class PiSessionService implements SessionRouteService {
     try {
       await session.reload(priorGeneration === undefined ? undefined : {
         beforeSessionStart: () => {
-          candidateGeneration = this.notificationStore.beginReplacement(priorGeneration, {
-            sessionId: session.sessionId,
-            cwd: session.sessionManager.getCwd(),
-          });
+          candidateGeneration = this.notificationStore.beginReplacement(priorGeneration, notificationIdentityForSession(session));
           this.notificationGenerationBySession.set(session, candidateGeneration);
           this.replaceSessionNotificationContext(session, candidateGeneration);
         },
@@ -1629,8 +1626,7 @@ export class PiSessionService implements SessionRouteService {
     if (this.hasActiveWork(session)) throw new Error("Stop current session activity before reloading");
 
     const priorGeneration = this.notificationGenerationBySession.get(session);
-    const sessionId = session.sessionId;
-    const cwd = session.sessionManager.getCwd();
+    const { sessionId, cwd } = notificationIdentityForSession(session);
     let candidateGeneration: SessionNotificationGeneration | undefined;
     try {
       await this.closeActive(
@@ -2016,17 +2012,18 @@ export class PiSessionService implements SessionRouteService {
         : "external";
 
     if (notificationOwnership === "registered") {
+      const notificationIdentity = notificationIdentityForSession(runtime.session);
       const existingCandidate = this.notificationStore.beginReplacementForSession(
-        runtime.session.sessionId,
-        runtime.session.sessionManager.getCwd(),
+        notificationIdentity.sessionId,
+        notificationIdentity.cwd,
       );
       if (existingCandidate !== undefined) {
         notificationGeneration = existingCandidate;
         notificationOwnership = "replacement";
       } else {
         const registration = this.notificationStore.registerSession(
-          runtime.session.sessionId,
-          runtime.session.sessionManager.getCwd(),
+          notificationIdentity.sessionId,
+          notificationIdentity.cwd,
         );
         notificationGeneration = registration.generation;
         this.publishNotificationMutations(registration.mutations);
@@ -2042,10 +2039,7 @@ export class PiSessionService implements SessionRouteService {
         let candidateGeneration: SessionNotificationGeneration | undefined;
         try {
           if (priorGeneration !== undefined) {
-            candidateGeneration = this.notificationStore.beginReplacement(priorGeneration, {
-              sessionId: session.sessionId,
-              cwd: session.sessionManager.getCwd(),
-            });
+            candidateGeneration = this.notificationStore.beginReplacement(priorGeneration, notificationIdentityForSession(session));
             this.notificationGenerationBySession.set(session, candidateGeneration);
           }
           this.bindRuntime(active, session);
@@ -2509,6 +2503,13 @@ function modelToClientModel(model: PiAgentSession["model"]): ClientSessionModel 
     ...(name === undefined ? {} : { name }),
     contextWindow: model.contextWindow,
     ...(reasoning === undefined ? {} : { reasoning }),
+  };
+}
+
+function notificationIdentityForSession(session: PiAgentSession): { sessionId: string; cwd: string } {
+  return {
+    sessionId: session.sessionId,
+    cwd: canonicalizeStoredCwd(session.sessionManager.getCwd()),
   };
 }
 

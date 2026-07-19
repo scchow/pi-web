@@ -337,6 +337,31 @@ describe("SessionNotificationController capability and joins", () => {
 });
 
 describe("SessionNotificationController optimistic mutations", () => {
+  it("does not let a delayed refresh snapshot roll back a newer dismissal response", async () => {
+    const initial = inboxSnapshot([entry(1)], { inboxRevision: 1, catalogRevision: 1 });
+    const delayedRefresh = deferred<SessionNotificationInboxSnapshot>();
+    const notificationInbox = vi.fn()
+      .mockResolvedValueOnce(initial)
+      .mockImplementationOnce(() => delayedRefresh.promise);
+    const dismissed = inboxSnapshot([], { inboxRevision: 2, catalogRevision: 2 });
+    const harness = createHarness(capableState(), {
+      notificationInbox,
+      dismissNotification: vi.fn(() => Promise.resolve(dismissed)),
+    });
+
+    harness.controller.prepareSelectedSession(session, "local");
+    await harness.controller.refreshSelectedSession(session, "local");
+    const refresh = harness.controller.refreshSelectedSession(session, "local");
+    await harness.controller.dismissNotification("daemon-a:1");
+
+    expect(selectedNotificationView(harness.state.selectedNotificationInbox)?.notifications).toEqual([]);
+    delayedRefresh.resolve(initial);
+    await refresh;
+
+    expect(harness.state.selectedNotificationInbox?.summary?.inboxRevision).toBe(2);
+    expect(selectedNotificationView(harness.state.selectedNotificationInbox)?.notifications).toEqual([]);
+  });
+
   it("optimistically dismisses one card, reconciles the response, and rolls back/refetches on failure", async () => {
     const dismiss = deferred<SessionNotificationInboxSnapshot>();
     const refreshAfterFailure = deferred<SessionNotificationInboxSnapshot>();

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { initialAppState, type AppState } from "../appState";
 import type { SessionInfo } from "../api";
 import type { NavigationNotificationBadges } from "./appShell/AppNavigationPanel";
+import { machineSwitcherNotificationBadge } from "./MachineSwitcher";
 import { PiWebApp } from "./PiWebApp";
 
 const currentSession: SessionInfo = {
@@ -83,6 +84,8 @@ describe("PiWebApp notification hierarchy models", () => {
     expect(badges.projects["project-1"]).toMatchObject({ text: "3+", severity: "error" });
     expect(badges.machines["local"]).toMatchObject({ text: "3+", severity: "error" });
     expect(badges.machines["remote"]).toMatchObject({ text: "5", severity: "info" });
+    expect(badges.machinesHeading).toMatchObject({ text: "8+", severity: "error" });
+    expect(machineSwitcherNotificationBadge("local", badges.machines, badges.machinesHeading)).toBe(badges.machinesHeading);
     expect(badges.sessionsHeading).toMatchObject({ text: "2", severity: "error" });
     expect(mobile).toMatchObject({ text: "8+", severity: "error" });
   });

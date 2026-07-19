@@ -16,6 +16,7 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
   @property({ attribute: false }) statuses: Record<string, MachineHealth> = {};
   @property({ attribute: false }) activities: Record<string, Record<string, WorkspaceActivity>> = {};
   @property({ attribute: false }) notificationBadges: Record<string, SessionNotificationBadgeModel | undefined> = {};
+  @property({ attribute: false }) notificationHeadingBadge?: SessionNotificationBadgeModel;
   @property({ attribute: false }) onSelect?: (machine: Machine) => void | Promise<void>;
   @property({ attribute: false }) onRemove?: (machine: Machine) => void | Promise<void>;
   @property({ attribute: false }) onFocusNextSection?: () => void | Promise<void>;
@@ -57,13 +58,14 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
     if (selected === undefined) return null;
     const status = machineStatus(selected, this.statuses);
     const label = selected.name;
+    const notificationBadge = machineSwitcherNotificationBadge(selected.id, this.notificationBadges, this.notificationHeadingBadge);
     return html`
       <div class="machine-switcher">
         <button
           type="button"
           class="machine-switcher-button"
           title=${machineTitle(selected)}
-          aria-label=${this.machineSwitcherAriaLabel(selected)}
+          aria-label=${this.machineSwitcherAriaLabel(selected, notificationBadge)}
           aria-expanded=${String(this.open)}
           @click=${(event: MouseEvent) => { this.toggleMenu(event.currentTarget); }}
           @keydown=${(event: KeyboardEvent) => { this.handleSwitcherButtonKeydown(event); }}
@@ -74,7 +76,7 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
             <span class="machine-switcher-label">${label}</span>
           </span>
           <span class=${`machine-status ${status}`}>${machineStatusLabel(status)}</span>
-          ${this.notificationBadges[selected.id] === undefined ? null : html`<notification-badge .model=${this.notificationBadges[selected.id]}></notification-badge>`}
+          ${notificationBadge === undefined ? null : html`<notification-badge .model=${notificationBadge}></notification-badge>`}
           <span class="machine-chevron" aria-hidden="true">▾</span>
         </button>
         ${this.open ? html`
@@ -136,9 +138,9 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
     return this.selected ?? this.machines.find((machine) => machine.id === "local") ?? this.machines[0];
   }
 
-  private machineSwitcherAriaLabel(machine: Machine): string {
-    const notificationLabel = this.notificationBadges[machine.id]?.accessibleLabel;
-    return `Machine: ${machine.name}.${notificationLabel === undefined ? "" : ` ${notificationLabel}.`} Switch machine.`;
+  private machineSwitcherAriaLabel(machine: Machine, notificationBadge: SessionNotificationBadgeModel | undefined): string {
+    const notificationLabel = notificationBadge?.accessibleLabel;
+    return `Machine: ${machine.name}.${notificationLabel === undefined ? "" : ` Notifications across machines: ${notificationLabel}.`} Switch machine.`;
   }
 
   private switcherButton(): HTMLElement | null {
@@ -310,6 +312,14 @@ export class MachineSwitcher extends LitElement implements KeyboardNavigableSect
     .machine-option-actions-panel button.danger:hover, .machine-option-actions-panel button.danger:focus-visible { background: color-mix(in srgb, var(--pi-danger) 14%, transparent); }
     @keyframes pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
   `;
+}
+
+export function machineSwitcherNotificationBadge(
+  selectedMachineId: string,
+  notificationBadges: Readonly<Record<string, SessionNotificationBadgeModel | undefined>>,
+  notificationHeadingBadge: SessionNotificationBadgeModel | undefined,
+): SessionNotificationBadgeModel | undefined {
+  return notificationHeadingBadge ?? notificationBadges[selectedMachineId];
 }
 
 function machineStatus(machine: Machine, statuses: Record<string, MachineHealth>): MachineStatus {

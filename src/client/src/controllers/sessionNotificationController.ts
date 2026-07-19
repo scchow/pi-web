@@ -301,7 +301,10 @@ export class SessionNotificationController {
           return;
         }
         this.acceptedSupportByMachine.add(target.machineId);
-        let inbox = installSelectedNotificationSnapshot(this.getState().selectedNotificationInbox, target, snapshot);
+        const current = this.getState().selectedNotificationInbox;
+        let inbox = current === undefined || shouldInstallSelectedSnapshot(current, target, snapshot)
+          ? installSelectedNotificationSnapshot(current, target, snapshot)
+          : current;
         const catalogEvents = [snapshotSummaryEvent(snapshot)];
         for (const event of [...join.events].sort((left, right) => left.summary.inboxRevision - right.summary.inboxRevision)) {
           const result = applySelectedNotificationEvent(inbox, target, event);
@@ -389,10 +392,9 @@ export class SessionNotificationController {
       this.setState({ selectedNotificationInbox: { ...removeOverlay(current), status: "stale" } });
       return;
     }
-    const shouldInstall = current.daemonInstanceId !== snapshot.daemonInstanceId
-      || current.summary === undefined
-      || snapshot.summary.inboxRevision >= current.summary.inboxRevision;
-    const authoritative = shouldInstall ? installSelectedNotificationSnapshot(current, target, snapshot) : current;
+    const authoritative = shouldInstallSelectedSnapshot(current, target, snapshot)
+      ? installSelectedNotificationSnapshot(current, target, snapshot)
+      : current;
     this.setState({ selectedNotificationInbox: removeOverlay(authoritative) });
     this.applyCatalogSummary(target.machineId, snapshotSummaryEvent(snapshot));
   }
@@ -576,6 +578,17 @@ function snapshotSummaryEvent(snapshot: SessionNotificationInboxSnapshot): Sessi
 
 function targetFromInbox(inbox: SelectedSessionNotificationInbox): SessionNotificationTarget {
   return { machineId: inbox.machineId, sessionId: inbox.sessionId, cwd: inbox.cwd };
+}
+
+function shouldInstallSelectedSnapshot(
+  current: SelectedSessionNotificationInbox,
+  target: SessionNotificationTarget,
+  snapshot: SessionNotificationInboxSnapshot,
+): boolean {
+  return !notificationTargetsEqual(current, target)
+    || current.daemonInstanceId !== snapshot.daemonInstanceId
+    || current.summary === undefined
+    || snapshot.summary.inboxRevision >= current.summary.inboxRevision;
 }
 
 async function forEachWithConcurrency<T>(items: readonly T[], concurrency: number, worker: (item: T) => Promise<void>): Promise<void> {
