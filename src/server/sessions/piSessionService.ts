@@ -46,7 +46,7 @@ import type {
   SessionWarning,
 } from "../../shared/apiTypes.js";
 import { createExtensionUIContext, type PendingExtensionUiRequest } from "./extensionUiContext.js";
-import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+
 import type { SessionRouteLookup, SessionRouteRef, SessionRouteService } from "./sessionService.js";
 
 import { type AuthChange } from "./authService.js";

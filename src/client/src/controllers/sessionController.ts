@@ -44,7 +44,6 @@ export interface SessionControllerDependencies {
   api?: typeof defaultApi;
   socket?: SessionEventSocket;
   transcripts?: ChatTranscriptStore;
-<<<<<<< HEAD
   notifications?: SessionNotificationSessionBridge;
   onExtensionUiDialog?: (request: ExtensionUiDialogRequest) => void;
   onExtensionUiNotify?: (notification: ExtensionUiNotification) => void;
