@@ -288,48 +288,44 @@ export const chatStyles = css`
   .session-warning-dismiss { position: absolute; top: 6px; right: 6px; display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 1px solid var(--pi-border); border-radius: 6px; background: var(--pi-surface); color: var(--pi-muted); font: 15px/1 system-ui, sans-serif; cursor: pointer; }
   .session-warning-dismiss:hover, .session-warning-dismiss:focus-visible { color: var(--pi-text-bright); border-color: var(--pi-accent); background: var(--pi-bg-overlay); }
   .session-warning-dismiss:focus-visible { outline: 1px solid var(--pi-border); outline-offset: 2px; }
-  .notification-tray { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; border-top: 2px solid var(--pi-accent-border); background: var(--pi-bg-overlay); }
-  .notification-tray.warning { border-top-color: var(--pi-warning-border); }
-  .notification-tray.error { border-top-color: var(--pi-danger); }
+  .notification-tray { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; background: var(--pi-bg-overlay); }
   .notification-tray.collapsed { flex: 0 0 auto; }
-  .notification-header { position: sticky; top: 0; z-index: 2; flex: 0 0 auto; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; box-sizing: border-box; padding: 8px 12px; background: var(--pi-bg-overlay); }
+  .notification-header { position: sticky; top: 0; z-index: 2; flex: 0 0 auto; min-width: 0; display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between; gap: 8px; box-sizing: border-box; min-height: 40px; padding: 4px 10px; border-bottom: 1px solid var(--pi-border-muted); background: var(--pi-bg-overlay); }
+  .notification-tray.collapsed .notification-header { border-bottom: 0; }
   .notification-header:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -3px; }
-  .notification-heading-group { min-width: 0; display: flex; align-items: center; gap: 8px; }
-  .notification-heading-icon { flex: 0 0 auto; font-size: 16px; }
-  .notification-heading-copy { min-width: 0; display: grid; gap: 2px; }
-  .notification-heading-copy strong { color: var(--pi-text-bright); }
-  .notification-heading-copy small { color: var(--pi-muted); white-space: normal; overflow-wrap: anywhere; }
-  .notification-header-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
-  .notification-control { min-height: 32px; border: 1px solid var(--pi-border); border-radius: 7px; background: var(--pi-surface); color: var(--pi-text); padding: 5px 8px; font: 12px system-ui, sans-serif; cursor: pointer; }
-  .notification-control:hover, .notification-control:focus-visible, .notification-card-dismiss:hover, .notification-card-dismiss:focus-visible { border-color: var(--pi-accent); color: var(--pi-text-bright); }
-  .notification-control:focus-visible, .notification-card-dismiss:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; }
-  .notification-control:disabled, .notification-card-dismiss:disabled { opacity: .55; cursor: default; }
-  .notification-cards { flex: 1 1 auto; min-height: 0; display: grid; align-content: start; gap: 8px; overflow-y: auto; overscroll-behavior-y: contain; box-sizing: border-box; padding: 0 12px 10px; }
-  .notification-overflow { margin: 0; border: 1px solid var(--pi-warning-border); border-radius: 8px; background: var(--pi-warning-surface); color: var(--pi-text); padding: 8px 10px; font-size: 12px; overflow-wrap: anywhere; }
-  .notification-card { position: relative; min-width: 0; display: grid; gap: 7px; box-sizing: border-box; padding: 10px 44px 10px 12px; border: 1px solid var(--pi-accent-border); border-radius: 10px; background: var(--pi-selection-bg); color: var(--pi-text); }
-  .notification-card.warning { border-color: var(--pi-warning-border); background: var(--pi-warning-surface); }
-  .notification-card.error { border-color: var(--pi-danger); background: color-mix(in srgb, var(--pi-danger) 12%, var(--pi-surface)); }
-  .notification-card:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -3px; }
-  .notification-card-head { min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 5px 10px; }
-  .notification-severity { color: var(--pi-accent); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
-  .notification-card.warning .notification-severity { color: var(--pi-warning); }
-  .notification-card.error .notification-severity { color: var(--pi-danger); }
-  .notification-card time { color: var(--pi-muted); font-size: 11px; }
+  .notification-heading { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--pi-text-bright); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+  .notification-header-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; }
+  .notification-control, .notification-row-dismiss { box-sizing: border-box; min-height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--pi-muted); cursor: pointer; }
+  .notification-control { padding: 0 7px; font: 12px system-ui, sans-serif; white-space: nowrap; }
+  .notification-toggle { display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; }
+  .notification-control:hover, .notification-control:focus-visible, .notification-row-dismiss:hover, .notification-row-dismiss:focus-visible { background: var(--pi-selection-bg); color: var(--pi-text-bright); }
+  .notification-control:focus-visible, .notification-row-dismiss:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 1px; }
+  .notification-control:disabled, .notification-row-dismiss:disabled { opacity: .5; background: transparent; cursor: default; }
+  .notification-icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+  .notification-disclosure-icon.expanded { transform: rotate(90deg); }
+  .notification-close-icon { width: 16px; height: 16px; }
+  .notification-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; box-sizing: border-box; padding: 0 10px 5px; }
+  .notification-list[hidden] { display: none; }
+  .notification-overflow { margin: 0; padding: 7px 2px; border-bottom: 1px solid var(--pi-border-muted); color: var(--pi-muted); font-size: 11px; overflow-wrap: anywhere; }
+  .notification-row { position: relative; min-width: 0; display: grid; gap: 4px; box-sizing: border-box; padding: 9px 38px 9px 2px; border-bottom: 1px solid var(--pi-border-muted); color: var(--pi-text); }
+  .notification-row:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -2px; }
+  .notification-metadata { min-width: 0; display: flex; align-items: baseline; gap: 5px; color: var(--pi-muted); font-size: 11px; }
+  .notification-severity { color: var(--pi-muted); font-size: inherit; font-weight: 600; }
+  .notification-row.warning .notification-severity { color: var(--pi-warning); }
+  .notification-row.error .notification-severity { color: var(--pi-danger); }
   .notification-message { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; text-align: start; unicode-bidi: plaintext; }
-  .notification-truncated { margin: 0; color: var(--pi-warning); font-size: 12px; overflow-wrap: anywhere; }
-  .notification-card-dismiss { position: absolute; top: 8px; right: 8px; display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid var(--pi-border); border-radius: 7px; background: var(--pi-surface); color: var(--pi-muted); font: 18px/1 system-ui, sans-serif; cursor: pointer; }
+  .notification-truncated { margin: 0; color: var(--pi-muted); font-size: 11px; overflow-wrap: anywhere; }
+  .notification-row-dismiss { position: absolute; top: 5px; right: 0; display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; }
   .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0 0 0 0) !important; clip-path: inset(50%) !important; white-space: nowrap !important; border: 0 !important; }
   .notification-live span { display: block; }
   @media (pointer: coarse) {
-    .notification-control { min-width: 44px; min-height: 44px; }
-    .notification-card { padding-right: 58px; }
-    .notification-card-dismiss { top: 6px; right: 6px; width: 44px; height: 44px; }
+    .notification-control, .notification-row-dismiss { min-height: 34px; }
+    .notification-toggle, .notification-row-dismiss { width: 34px; height: 34px; }
+    .notification-row { padding-right: 40px; }
   }
   @media (max-width: 520px) {
-    .notification-header { align-items: flex-start; flex-wrap: wrap; }
-    .notification-heading-group { flex: 1 1 180px; }
-    .notification-header-actions { margin-left: auto; }
-    .notification-control { padding-inline: 8px; }
+    .notification-header { gap: 4px; padding-inline: 8px; }
+    .notification-list { padding-inline: 8px; }
   }
   .chat { height: 100%; min-height: 0; overflow: auto; overflow-anchor: none; padding: 26px 16px 64px; box-sizing: border-box; }
   .scroll-marker { display: block; height: 0; overflow: hidden; pointer-events: none; }

@@ -35,7 +35,7 @@ function inboxEvent() {
 }
 
 describe("notification socket guards", () => {
-  it("accepts validated per-session and global notification events", () => {
+  it("accepts validated selected-session events and drops global notification summaries", () => {
     expect(parseSessionSocketEvent(inboxEvent())).toMatchObject({ type: "notifications.inbox", delta: { kind: "added" } });
 
     expect(parseRealtimeSocketEvent({
@@ -43,7 +43,7 @@ describe("notification socket guards", () => {
       daemonInstanceId: "daemon-a",
       catalogRevision: 1,
       summary: summary(),
-    })).toMatchObject({ type: "notifications.summary", summary: { sessionId: "session-1" } });
+    })).toBeUndefined();
   });
 
   it("ignores malformed notification events instead of widening type-only acceptance", () => {
@@ -54,12 +54,6 @@ describe("notification socket guards", () => {
       summary: { ...summary(), highestSeverity: "fatal" },
       dismissThrough: { order: 1, overflowWatermark: 0 },
       delta: { kind: "added", notification: notification() },
-    })).toBeUndefined();
-    expect(parseRealtimeSocketEvent({
-      type: "notifications.summary",
-      daemonInstanceId: "daemon-a",
-      catalogRevision: Number.POSITIVE_INFINITY,
-      summary: summary(),
     })).toBeUndefined();
   });
 
@@ -139,10 +133,13 @@ describe("socket instance isolation", () => {
     const oldHandler = vi.fn();
     const newHandler = vi.fn();
     const event = {
-      type: "notifications.summary",
-      daemonInstanceId: "daemon-a",
-      catalogRevision: 1,
-      summary: summary(),
+      type: "workspace.activity",
+      activity: {
+        cwd: "/repo",
+        hasSessionActivity: true,
+        hasTerminalActivity: false,
+        updatedAt: "2026-07-18T00:00:00.000Z",
+      },
     };
     socket.connect(oldHandler, undefined, "machine-a");
     const oldSocket = FakeWebSocket.instances[0];

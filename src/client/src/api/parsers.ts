@@ -1,4 +1,4 @@
-import { SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, type ArchiveSessionsResponse, type AuthProviderOption, type AuthProviderStatus, type AuthProvidersResponse, type AuthStatusSource, type AuthType, type CommandOption, type CommandResult, type DeleteWorkspaceFileResponse, type FileContentResponse, type FileSuggestion, type FileTreeEntry, type FileTreeResponse, type GitDiffResponse, type GitFileState, type GitStatusFile, type GitStatusResponse, type Machine, type MachineHealth, type MachineKind, type MachineRuntime, type MachineStatus, type MessagePage, type ModelSelectionResponse, type MoveWorkspaceFileResponse, type OAuthFlowState, type PiWebAgentDirEnvSource, type PiWebCapability, type PiWebComponentStatus, type PiWebConfigEnvOverrides, type PiWebConfigResponse, type PiWebConfigValues, type PiWebInstallationInfo, type PiWebPluginConfigMap, type PiWebPluginInfo, type PiWebPluginsResponse, type PiWebPluginScope, type PiWebReleaseStatus, type PiWebRuntimeComponent, type PiWebRuntimeResponse, type PiWebServiceComponent, type PiWebShortcutConfig, type PiWebStatusMessage, type PiWebStatusResponse, type PiWebStatusSeverity, type Project, type QueuedSessionMessage, type SavedPromptAttachment, type SessionBulkArchiveResponse, type SessionBulkDeleteArchivedResponse, type SessionBulkFailure, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupProjectSummary, type SessionCleanupThresholds, type SessionCleanupTotals, type SessionInfo, type SessionModel, type SessionNotification, type SessionNotificationCatalogSnapshot, type SessionNotificationClearReason, type SessionNotificationDismissThrough, type SessionNotificationInboxDelta, type SessionNotificationInboxEvent, type SessionNotificationInboxSnapshot, type SessionNotificationSeverity, type SessionNotificationSummary, type SessionNotificationSummaryEvent, type SessionStatus, type SessionStreamSnapshot, type SessionWarning, type SessionWarningSeverity, type SlashCommand, type TerminalCommandRun, type TerminalCommandRunStatus, type TerminalInfo, type ThinkingLevelsResponse, type WriteWorkspaceFileResponse, type Workspace, type WorkspaceActivity, type WorkspaceActivityResponse } from "../../../shared/apiTypes";
+import { SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, type ArchiveSessionsResponse, type AuthProviderOption, type AuthProviderStatus, type AuthProvidersResponse, type AuthStatusSource, type AuthType, type CommandOption, type CommandResult, type DeleteWorkspaceFileResponse, type FileContentResponse, type FileSuggestion, type FileTreeEntry, type FileTreeResponse, type GitDiffResponse, type GitFileState, type GitStatusFile, type GitStatusResponse, type Machine, type MachineHealth, type MachineKind, type MachineRuntime, type MachineStatus, type MessagePage, type ModelSelectionResponse, type MoveWorkspaceFileResponse, type OAuthFlowState, type PiWebAgentDirEnvSource, type PiWebCapability, type PiWebComponentStatus, type PiWebConfigEnvOverrides, type PiWebConfigResponse, type PiWebConfigValues, type PiWebInstallationInfo, type PiWebPluginConfigMap, type PiWebPluginInfo, type PiWebPluginsResponse, type PiWebPluginScope, type PiWebReleaseStatus, type PiWebRuntimeComponent, type PiWebRuntimeResponse, type PiWebServiceComponent, type PiWebShortcutConfig, type PiWebStatusMessage, type PiWebStatusResponse, type PiWebStatusSeverity, type Project, type QueuedSessionMessage, type SavedPromptAttachment, type SessionBulkArchiveResponse, type SessionBulkDeleteArchivedResponse, type SessionBulkFailure, type SessionCleanupExecuteResponse, type SessionCleanupPreviewResponse, type SessionCleanupProjectSummary, type SessionCleanupThresholds, type SessionCleanupTotals, type SessionInfo, type SessionModel, type SessionNotification, type SessionNotificationClearReason, type SessionNotificationDismissThrough, type SessionNotificationInboxDelta, type SessionNotificationInboxEvent, type SessionNotificationInboxSnapshot, type SessionNotificationSeverity, type SessionNotificationSummary, type SessionStatus, type SessionStreamSnapshot, type SessionWarning, type SessionWarningSeverity, type SlashCommand, type TerminalCommandRun, type TerminalCommandRunStatus, type TerminalInfo, type ThinkingLevelsResponse, type WriteWorkspaceFileResponse, type Workspace, type WorkspaceActivity, type WorkspaceActivityResponse } from "../../../shared/apiTypes";
 import type { PiPackageInfo, PiPackageMutationAction, PiPackageMutationResponse, PiPackageScope, PiPackagesResponse } from "../../../shared/apiTypes";
 import { parseActiveAgentProfileDescriptor } from "../../../shared/activeAgentProfile";
 import { parseKnownPiWebCapabilities } from "../../../shared/capabilities";
@@ -233,19 +233,6 @@ export function parseSessionStreamSnapshot(value: unknown): SessionStreamSnapsho
   };
 }
 
-export function parseSessionNotificationCatalogSnapshot(value: unknown): SessionNotificationCatalogSnapshot {
-  const record = requireRecord(value);
-  const sessions = arrayOf(parseSessionNotificationSummary)(record["sessions"]);
-  const sessionIds = new Set(sessions.map((summary) => summary.sessionId));
-  if (sessionIds.size !== sessions.length) throw new Error("Duplicate notification catalog session id");
-  if (sessions.some((summary) => summary.retainedCount === 0 && summary.discardedCount === 0)) throw new Error("Empty notification summary in catalog");
-  return {
-    daemonInstanceId: requireNonEmptyString(record, "daemonInstanceId"),
-    catalogRevision: requireNonNegativeSafeInteger(record, "catalogRevision"),
-    sessions,
-  };
-}
-
 export function parseSessionNotificationInboxSnapshot(value: unknown): SessionNotificationInboxSnapshot {
   const record = requireRecord(value);
   const summary = parseSessionNotificationSummary(record["summary"]);
@@ -286,18 +273,7 @@ export function parseSessionNotificationInboxEvent(value: unknown): SessionNotif
   };
 }
 
-export function parseSessionNotificationSummaryEvent(value: unknown): SessionNotificationSummaryEvent {
-  const record = requireRecord(value);
-  if (record["type"] !== "notifications.summary") throw new Error("Invalid notification summary event type");
-  return {
-    type: "notifications.summary",
-    daemonInstanceId: requireNonEmptyString(record, "daemonInstanceId"),
-    catalogRevision: requireNonNegativeSafeInteger(record, "catalogRevision"),
-    summary: parseSessionNotificationSummary(record["summary"]),
-  };
-}
-
-export function parseSessionNotificationSummary(value: unknown): SessionNotificationSummary {
+function parseSessionNotificationSummary(value: unknown): SessionNotificationSummary {
   const record = requireRecord(value);
   const retainedCount = requireNonNegativeSafeInteger(record, "retainedCount");
   if (retainedCount > SESSION_NOTIFICATION_LIMIT) throw new Error("Notification retained count exceeds limit");

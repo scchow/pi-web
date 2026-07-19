@@ -6,7 +6,6 @@ import type {
   Machine,
   SessionInfo,
   SessionNotification,
-  SessionNotificationCatalogSnapshot,
   SessionNotificationInboxEvent,
   SessionNotificationInboxSnapshot,
 } from "../../../shared/apiTypes";
@@ -64,14 +63,6 @@ function inboxSnapshot(
   };
 }
 
-function catalogSnapshot(catalogRevision = 1): SessionNotificationCatalogSnapshot {
-  return {
-    daemonInstanceId: "daemon-a",
-    catalogRevision,
-    sessions: [inboxSnapshot([entry(1)], { inboxRevision: catalogRevision, catalogRevision }).summary],
-  };
-}
-
 function addedEvent(notification: SessionNotification, inboxRevision: number, retainedCount: number): SessionNotificationInboxEvent {
   return {
     type: "notifications.inbox",
@@ -111,11 +102,9 @@ function capableState(): AppState {
 function createHarness(initialState = capableState(), overrides: Partial<SessionNotificationApi> = {}) {
   let state = initialState;
   const api: SessionNotificationApi = {
-    notificationCatalog: vi.fn(() => Promise.resolve(catalogSnapshot())),
     notificationInbox: vi.fn(() => Promise.resolve(inboxSnapshot())),
     dismissNotification: vi.fn(() => Promise.resolve(inboxSnapshot([], { inboxRevision: 2, catalogRevision: 2 }))),
     dismissAllNotifications: vi.fn(() => Promise.resolve(inboxSnapshot([], { inboxRevision: 2, catalogRevision: 2 }))),
-    workspaces: vi.fn(() => Promise.resolve([])),
     ...overrides,
   };
   const controller = new SessionNotificationController(
@@ -131,149 +120,83 @@ function createHarness(initialState = capableState(), overrides: Partial<Session
   };
 }
 
-describe("SessionNotificationController capability and joins", () => {
-  it("makes no notification requests and preserves marked legacy output without effective capability support", async () => {
+describe("SessionNotificationController selected inbox ownership", () => {
+  it("makes no notification request and preserves marked legacy output without effective capability support", async () => {
     const state = { ...capableState(), machineRuntimes: {} };
     const harness = createHarness(state);
 
     harness.controller.prepareSelectedSession(session, "local");
     await harness.controller.refreshSelectedSession(session, "local");
-    harness.controller.globalSocketOpened("local");
-    await harness.controller.refreshAfterBrowserResume();
 
     expect(harness.api.notificationInbox).not.toHaveBeenCalled();
-    expect(harness.api.notificationCatalog).not.toHaveBeenCalled();
     expect(harness.controller.shouldFilterLegacyNotification("local", "notification-1")).toBe(false);
     expect(harness.state.selectedNotificationInbox).toBeUndefined();
   });
 
-  it("treats a validated authoritative event as support during a rolling capability transition", async () => {
+  it("treats a validated selected-inbox event as support during a rolling capability transition", async () => {
     const state = { ...capableState(), machineRuntimes: {} };
     const harness = createHarness(state);
     harness.controller.prepareSelectedSession(session, "local");
 
-    harness.controller.applySummaryEvent("local", {
-      type: "notifications.summary",
-      daemonInstanceId: "daemon-a",
-      catalogRevision: 1,
-      summary: inboxSnapshot().summary,
-    });
+    harness.controller.applyInboxEvent("local", addedEvent(entry(1), 1, 1));
 
-    await vi.waitFor(() => {
-      expect(harness.api.notificationCatalog).toHaveBeenCalledOnce();
-      expect(harness.api.notificationInbox).toHaveBeenCalledOnce();
-    });
+    await vi.waitFor(() => { expect(harness.api.notificationInbox).toHaveBeenCalledOnce(); });
+    expect(selectedNotificationView(harness.state.selectedNotificationInbox)?.notifications).toHaveLength(1);
     expect(harness.controller.shouldFilterLegacyNotification("local", "daemon-a:1")).toBe(true);
   });
 
-  it("buffers global events around catalog hydration and applies newer revisions in order", async () => {
-    const catalog = deferred<SessionNotificationCatalogSnapshot>();
-    const harness = createHarness(capableState(), { notificationCatalog: vi.fn(() => catalog.promise) });
-
-    harness.controller.globalSocketOpened("local");
-    harness.controller.applySummaryEvent("local", {
-      type: "notifications.summary",
-      daemonInstanceId: "daemon-a",
-      catalogRevision: 2,
-      summary: {
-        ...inboxSnapshot([entry(2, "warning"), entry(1)], { inboxRevision: 2, catalogRevision: 2 }).summary,
-      },
-    });
-
-    expect(harness.state.notificationCatalogsByMachine["local"]).toBeUndefined();
-    catalog.resolve(catalogSnapshot(1));
-    await vi.waitFor(() => { expect(harness.state.notificationCatalogsByMachine["local"]?.catalogRevision).toBe(2); });
-
-    expect(harness.state.notificationCatalogsByMachine["local"]).toMatchObject({ status: "fresh", daemonInstanceId: "daemon-a" });
-    expect(harness.state.notificationCatalogsByMachine["local"]?.summariesBySessionId[session.id]).toMatchObject({ retainedCount: 2, highestSeverity: "warning" });
-    expect(harness.controller.shouldFilterLegacyNotification("local", "notification-1")).toBe(true);
-  });
-
-  it("lets the selected live event announce before its matching global summary can trigger a snapshot", async () => {
-    const first = inboxSnapshot([entry(1)], { inboxRevision: 1, catalogRevision: 1 });
-    const state = {
-      ...capableState(),
-      notificationCatalogsByMachine: {
-        local: {
-          machineId: "local",
-          status: "fresh" as const,
-          daemonInstanceId: first.daemonInstanceId,
-          catalogRevision: first.catalogRevision,
-          summariesBySessionId: { [session.id]: first.summary },
-        },
-      },
-    };
-    const notificationInbox = vi.fn(() => Promise.resolve(first));
-    const harness = createHarness(state, { notificationInbox });
-    harness.controller.prepareSelectedSession(session, "local");
-    await harness.controller.refreshSelectedSession(session, "local");
-
-    const event = addedEvent(entry(2, "warning"), 2, 2);
-    harness.controller.applySummaryEvent("local", {
-      type: "notifications.summary",
-      daemonInstanceId: event.daemonInstanceId,
-      catalogRevision: event.catalogRevision,
-      summary: event.summary,
-    });
-    await Promise.resolve();
-    expect(notificationInbox).toHaveBeenCalledOnce();
-
-    harness.controller.applyInboxEvent("local", event);
-    expect(selectedNotificationView(harness.state.selectedNotificationInbox)?.announcements).toMatchObject([
-      { severity: "warning", message: "notice 2" },
-    ]);
-    expect(notificationInbox).toHaveBeenCalledOnce();
-  });
-
-  it("refetches the selected inbox when a newly opened global socket finds a newer catalog revision", async () => {
-    const first = inboxSnapshot([entry(1)], { inboxRevision: 1, catalogRevision: 1 });
-    const second = inboxSnapshot([entry(2, "error"), entry(1)], { inboxRevision: 2, catalogRevision: 2 });
-    const notificationInbox = vi.fn()
-      .mockResolvedValueOnce(first)
-      .mockResolvedValueOnce(second);
-    const notificationCatalog = vi.fn(() => Promise.resolve<SessionNotificationCatalogSnapshot>({
-      daemonInstanceId: second.daemonInstanceId,
-      catalogRevision: second.catalogRevision,
-      sessions: [second.summary],
-    }));
-    const harness = createHarness(capableState(), { notificationInbox, notificationCatalog });
+  it("joins selected live events that arrive while the selected snapshot is loading", async () => {
+    const pendingInbox = deferred<SessionNotificationInboxSnapshot>();
+    const harness = createHarness(capableState(), { notificationInbox: vi.fn(() => pendingInbox.promise) });
 
     harness.controller.prepareSelectedSession(session, "local");
-    await harness.controller.refreshSelectedSession(session, "local");
-    harness.controller.globalSocketOpened("local");
+    const refresh = harness.controller.refreshSelectedSession(session, "local");
+    harness.controller.applyInboxEvent("local", addedEvent(entry(2, "warning"), 2, 2));
+    pendingInbox.resolve(inboxSnapshot([entry(1)], { inboxRevision: 1, catalogRevision: 1 }));
+    await refresh;
 
-    await vi.waitFor(() => { expect(notificationInbox).toHaveBeenCalledTimes(2); });
     expect(selectedNotificationView(harness.state.selectedNotificationInbox)?.notifications.map((notification) => notification.id)).toEqual([
       "daemon-a:2",
       "daemon-a:1",
     ]);
+    expect(selectedNotificationView(harness.state.selectedNotificationInbox)?.announcements).toMatchObject([
+      { severity: "warning", message: "notice 2" },
+    ]);
   });
 
-  it("hydrates missing selected-machine project workspaces without changing selection", async () => {
-    const project = { id: "project-1", name: "Repo", path: "/repo", createdAt: "now" };
-    const next = {
-      ...capableState(),
-      projects: [project],
-      selectedProject: project,
-      notificationCatalogsByMachine: {
-        local: {
-          machineId: "local",
-          status: "fresh" as const,
-          daemonInstanceId: "daemon-a",
-          catalogRevision: 1,
-          summariesBySessionId: { [session.id]: inboxSnapshot().summary },
-        },
-      },
-    };
-    const workspace = { id: "workspace-1", projectId: project.id, path: "/repo", label: "repo", isMain: true, isGitRepo: true, isGitWorktree: false };
-    const workspaces = vi.fn(() => Promise.resolve([workspace]));
-    const harness = createHarness(next, { workspaces });
+  it("ignores notification events for an unselected chat", async () => {
+    const harness = createHarness();
+    harness.controller.prepareSelectedSession(session, "local");
+    await harness.controller.refreshSelectedSession(session, "local");
+    const selectedBefore = harness.state.selectedNotificationInbox;
 
-    harness.controller.syncEnvironment(initialAppState(), next);
+    harness.controller.applyInboxEvent("local", {
+      ...addedEvent(entry(2), 2, 1),
+      summary: { ...addedEvent(entry(2), 2, 1).summary, sessionId: "session-2" },
+    });
+    await Promise.resolve();
 
-    await vi.waitFor(() => { expect(harness.state.workspacesByProjectId[project.id]).toEqual([workspace]); });
-    expect(workspaces).toHaveBeenCalledExactlyOnceWith(project.id, "local");
-    expect(harness.state.selectedProject).toBe(project);
+    expect(harness.api.notificationInbox).toHaveBeenCalledOnce();
+    expect(harness.state.selectedNotificationInbox).toBe(selectedBefore);
+  });
+
+  it("recovers a selected inbox revision gap from its bounded snapshot", async () => {
+    const first = inboxSnapshot([entry(1)], { inboxRevision: 1, catalogRevision: 1 });
+    const recovered = inboxSnapshot([entry(3), entry(1)], { inboxRevision: 3, catalogRevision: 3 });
+    const notificationInbox = vi.fn()
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(recovered);
+    const harness = createHarness(capableState(), { notificationInbox });
+    harness.controller.prepareSelectedSession(session, "local");
+    await harness.controller.refreshSelectedSession(session, "local");
+
+    harness.controller.applyInboxEvent("local", addedEvent(entry(3), 3, 2));
+
+    await vi.waitFor(() => { expect(notificationInbox).toHaveBeenCalledTimes(2); });
+    expect(selectedNotificationView(harness.state.selectedNotificationInbox)?.notifications.map((notification) => notification.id)).toEqual([
+      "daemon-a:3",
+      "daemon-a:1",
+    ]);
   });
 
   it("ignores an old selected-inbox response after selection changes", async () => {
@@ -372,12 +295,7 @@ describe("SessionNotificationController optimistic mutations", () => {
     const dismissNotification = vi.fn()
       .mockImplementationOnce(() => dismiss.promise)
       .mockRejectedValueOnce(new Error("offline"));
-    const notificationCatalog = vi.fn(() => Promise.resolve<SessionNotificationCatalogSnapshot>({
-      daemonInstanceId: initialInbox.daemonInstanceId,
-      catalogRevision: initialInbox.catalogRevision,
-      sessions: [initialInbox.summary],
-    }));
-    const harness = createHarness(capableState(), { notificationInbox, dismissNotification, notificationCatalog });
+    const harness = createHarness(capableState(), { notificationInbox, dismissNotification });
 
     harness.controller.prepareSelectedSession(session, "local");
     await harness.controller.refreshSelectedSession(session, "local");

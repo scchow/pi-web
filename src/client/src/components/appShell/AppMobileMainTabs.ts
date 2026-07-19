@@ -1,9 +1,7 @@
 import { LitElement, css, html, type TemplateResult } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import type { AppState } from "../../appState";
-import type { SessionNotificationBadgeModel } from "../../sessionNotifications";
 import { renderAppTabIcon, type AppTabBuiltinIcon } from "../tabIcons";
-import "../NotificationBadge";
 
 export type AppMobileMainTabBuiltinIcon = AppTabBuiltinIcon;
 export type AppMobileMainTabIcon = AppMobileMainTabBuiltinIcon | TemplateResult;
@@ -76,7 +74,6 @@ export class AppMobileMainTabs extends LitElement {
   }
 
   private tabAriaLabel(tab: AppMobileMainTab): string {
-    if (isSessionNotificationBadgeModel(tab.badge)) return `${tab.label}, ${tab.badge.accessibleLabel}`;
     if (typeof tab.badge !== "string" && typeof tab.badge !== "number") return tab.label;
     const badge = String(tab.badge).trim();
     return badge === "" ? tab.label : `${tab.label}, ${badge}`;
@@ -84,7 +81,6 @@ export class AppMobileMainTabs extends LitElement {
 
   private renderBadge(badge: unknown) {
     if (badge === undefined || badge === "") return null;
-    if (isSessionNotificationBadgeModel(badge)) return html`<notification-badge .model=${badge}></notification-badge>`;
     return html`<span class="tab-badge">${badge}</span>`;
   }
 
@@ -179,11 +175,4 @@ export class AppMobileMainTabs extends LitElement {
       .tab-badge { min-width: 13px; padding: 0 4px; font-size: 10px; line-height: 13px; }
     }
   `;
-}
-
-function isSessionNotificationBadgeModel(value: unknown): value is SessionNotificationBadgeModel {
-  return typeof value === "object" && value !== null
-    && "accessibleLabel" in value && typeof value.accessibleLabel === "string"
-    && "severity" in value && (value.severity === "info" || value.severity === "warning" || value.severity === "error")
-    && "text" in value && typeof value.text === "string";
 }

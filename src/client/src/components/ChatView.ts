@@ -9,14 +9,20 @@ import { shouldRequestEarlierMessages } from "../chatHistoryLoading";
 import { ChatScrollController, distanceFromScrollBottom, findFirstVisibleArticle, isNearScrollBottom, type ChatAnchorScrollPosition, type ChatScrollRestoreResult } from "../chatScrollPosition";
 import type { QueuedSessionMessage, SessionActivity, SessionStatus, SessionWarningSeverity } from "../api";
 import {
+  notificationAnnouncementLabel,
+  notificationDismissLabel,
   notificationFocusTargetAfterDismiss,
   notificationInboxOverflowLabel,
+  notificationInboxTotalCount,
   notificationMessageTruncationLabel,
-  notificationSeverityIcon,
   notificationSeverityLabel,
+  notificationTargetKey,
+  notificationTrayHeading,
+  notificationTrayIsCollapsed,
   setNotificationTrayCollapsed,
   type NotificationFocusTarget,
   type SelectedSessionNotificationView,
+  type SessionNotificationTarget,
 } from "../sessionNotifications";
 import type { ChatLine, ChatPart } from "./shared";
 import { chatStyles } from "./shared";
@@ -25,12 +31,37 @@ import "./FormattedText";
 import "./ToolExecutionView";
 
 const messageTimestampFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" });
-const notificationTimestampFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+const notificationTimestampFormatter = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
 
 function warningSeverityIcon(severity: SessionWarningSeverity): string {
   if (severity === "error") return "⛔";
   if (severity === "info") return "ℹ️";
   return "⚠️";
+}
+
+function renderNotificationDisclosureIcon(collapsed: boolean) {
+  return html`
+    <svg class=${`notification-icon notification-disclosure-icon${collapsed ? "" : " expanded"}`} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="m9 18 6-6-6-6"></path>
+    </svg>
+  `;
+}
+
+function renderNotificationCloseIcon() {
+  return html`
+    <svg class="notification-icon notification-close-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M6 6l12 12"></path>
+      <path d="M18 6 6 18"></path>
+    </svg>
+  `;
+}
+
+function isSessionNotificationTarget(value: unknown): value is SessionNotificationTarget {
+  return typeof value === "object"
+    && value !== null
+    && typeof Reflect.get(value, "machineId") === "string"
+    && typeof Reflect.get(value, "cwd") === "string"
+    && typeof Reflect.get(value, "sessionId") === "string";
 }
 
 function clampPercent(value: number): number {
@@ -40,6 +71,11 @@ function clampPercent(value: number): number {
 function clampNumber(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
+}
+
+interface PendingNotificationFocus {
+  chatKey: string;
+  focusTarget: NotificationFocusTarget;
 }
 
 export interface QueuedMessageSection {
@@ -176,9 +212,9 @@ export class ChatView extends LitElement {
   @state() private expandedMetaKey: string | undefined;
   @state() private copiedMessageKey: string | undefined;
   @state() private currentConversationIndex: number | undefined;
-  @state() private collapsedNotificationSessionIds: ReadonlySet<string> = new Set();
-  @state() private retainedEmptyNotificationTraySessionId: string | undefined;
-  private pendingNotificationFocus: NotificationFocusTarget | undefined;
+  @state() private collapsedNotificationTargetKeys: ReadonlySet<string> = new Set();
+  @state() private retainedEmptyNotificationTrayTargetKey: string | undefined;
+  private pendingNotificationFocus: PendingNotificationFocus | undefined;
   private readonly disclosures = new ChatDisclosureController();
   private readonly scrollController = new ChatScrollController();
   private suppressScrollSave = false;
@@ -255,7 +291,7 @@ export class ChatView extends LitElement {
   private prepareSessionUiState(): void {
     this.disclosures.syncSession(this.sessionId);
     this.pendingNotificationFocus = undefined;
-    this.retainedEmptyNotificationTraySessionId = undefined;
+    this.retainedEmptyNotificationTrayTargetKey = undefined;
     this.scrollController.clearScheduledSave();
     this.suppressScrollSave = false;
     this.suppressLoadMoreRequests = false;
@@ -272,6 +308,9 @@ export class ChatView extends LitElement {
     if (changed.has("sessionId")) {
       this.savePreviousSessionScrollPosition(changed.get("sessionId"));
       this.prepareSessionUiState();
+    } else if (changed.has("notificationInbox") && this.notificationTargetChanged(changed.get("notificationInbox"))) {
+      this.pendingNotificationFocus = undefined;
+      this.retainedEmptyNotificationTrayTargetKey = undefined;
     }
     if (changed.has("messages")) this.pinnedToBottom = this.pinnedToBottom && (this.didChatHeightChange() || this.isNearBottom());
   }
@@ -299,6 +338,12 @@ export class ChatView extends LitElement {
     if (dialog === undefined) return;
     if (this.zoomedImage !== undefined && !dialog.open) dialog.showModal();
     else if (this.zoomedImage === undefined && dialog.open) dialog.close();
+  }
+
+  private notificationTargetChanged(previous: unknown): boolean {
+    const currentInbox = this.notificationInbox;
+    if (!isSessionNotificationTarget(previous) || currentInbox === undefined) return previous !== currentInbox;
+    return notificationTargetKey(previous) !== notificationTargetKey(currentInbox);
   }
 
   override render() {
@@ -338,58 +383,65 @@ export class ChatView extends LitElement {
   private renderNotificationTray() {
     const inbox = this.notificationInbox;
     if (inbox?.sessionId !== this.sessionId) return null;
+    const chatKey = notificationTargetKey(inbox);
     const hasPendingOverlay = inbox.pendingDismissedIds.size > 0 || inbox.dismissAllPending;
-    const retainsFocusTarget = this.retainedEmptyNotificationTraySessionId === this.sessionId;
-    if (inbox.retainedCount === 0 && inbox.discardedCount === 0 && !hasPendingOverlay && !retainsFocusTarget) return null;
-    const collapsed = this.collapsedNotificationSessionIds.has(this.sessionId);
-    const severity = inbox.highestSeverity ?? "info";
-    const severityLabel = notificationSeverityLabel(severity);
-    const countLabel = `${String(inbox.retainedCount)} undismissed ${inbox.retainedCount === 1 ? "notification" : "notifications"}`;
-    const discardedLabel = inbox.discardedCount === 0 ? "" : ` · ${String(inbox.discardedCount)} older ${inbox.discardedCount === 1 ? "notification" : "notifications"} discarded`;
+    const retainsFocusTarget = this.retainedEmptyNotificationTrayTargetKey === chatKey;
+    const totalCount = notificationInboxTotalCount(inbox);
+    if (totalCount === 0 && !hasPendingOverlay && !retainsFocusTarget) return null;
+    const collapsed = notificationTrayIsCollapsed(this.collapsedNotificationTargetKeys, inbox);
+    const toggleLabel = collapsed ? "Expand notifications" : "Collapse notifications";
     return html`
-      <section class=${`notification-tray ${severity} ${collapsed ? "collapsed" : ""}`} role="region" aria-labelledby="session-notifications-heading" @focusout=${(event: FocusEvent) => { this.releaseEmptyNotificationTray(event); }}>
+      <section class=${`notification-tray${collapsed ? " collapsed" : ""}`} role="region" aria-labelledby="session-notifications-heading" @focusout=${(event: FocusEvent) => { this.releaseEmptyNotificationTray(event); }}>
         <header class="notification-header" data-notification-focus="header" tabindex="-1">
-          <div class="notification-heading-group">
-            <span class="notification-heading-icon" aria-hidden="true">${notificationSeverityIcon(severity)}</span>
-            <span class="notification-heading-copy">
-              <strong id="session-notifications-heading">Notifications</strong>
-              <small>${countLabel}${discardedLabel} · highest severity ${severityLabel}</small>
-            </span>
-          </div>
+          <strong class="notification-heading" id="session-notifications-heading">${notificationTrayHeading(inbox)}</strong>
           <div class="notification-header-actions">
-            <button type="button" class="notification-control notification-toggle" aria-expanded=${String(!collapsed)} aria-controls="session-notification-cards" @click=${() => { this.toggleNotificationTray(collapsed); }}>${collapsed ? "Expand" : "Collapse"}</button>
-            <button type="button" class="notification-control notification-dismiss-all" ?disabled=${inbox.dismissAllPending || inbox.retainedCount + inbox.discardedCount === 0} @click=${() => { this.onDismissAllNotifications?.(); }}>Dismiss all</button>
+            <button
+              type="button"
+              class="notification-control notification-clear"
+              aria-label="Clear all notifications"
+              title="Clear all notifications"
+              ?disabled=${inbox.dismissAllPending || totalCount === 0 || this.onDismissAllNotifications === undefined}
+              @click=${() => { this.dismissAllNotifications(); }}
+            >Clear</button>
+            <button
+              type="button"
+              class="notification-control notification-toggle"
+              aria-label=${toggleLabel}
+              title=${toggleLabel}
+              aria-expanded=${String(!collapsed)}
+              aria-controls="session-notification-list"
+              @click=${() => { this.toggleNotificationTray(inbox, collapsed); }}
+            >${renderNotificationDisclosureIcon(collapsed)}</button>
           </div>
         </header>
-        ${collapsed ? null : html`
-          <div class="notification-cards" id="session-notification-cards">
-            ${inbox.discardedCount === 0 ? null : html`
-              <p class="notification-overflow" role="status">${notificationInboxOverflowLabel(inbox.discardedCount)}</p>
-            `}
-            ${inbox.notifications.map((notification) => {
-              const label = notificationSeverityLabel(notification.severity);
-              const truncationLabel = notificationMessageTruncationLabel(notification);
-              return html`
-                <article class=${`notification-card ${notification.severity}`} data-notification-id=${notification.id} tabindex="-1">
-                  <div class="notification-card-head">
-                    <strong class="notification-severity"><span aria-hidden="true">${notificationSeverityIcon(notification.severity)}</span> ${label}</strong>
-                    <time datetime=${notification.receivedAt}>${notificationTimestampFormatter.format(new Date(notification.receivedAt))}</time>
-                  </div>
-                  <p class="notification-message" dir="auto">${notification.message}</p>
-                  ${truncationLabel === undefined ? null : html`<p class="notification-truncated">${truncationLabel}</p>`}
-                  <button
-                    type="button"
-                    class="notification-card-dismiss"
-                    aria-label=${`Dismiss ${label.toLocaleLowerCase()} notification`}
-                    title="Dismiss notification"
-                    ?disabled=${inbox.pendingDismissedIds.has(notification.id) || inbox.dismissAllPending}
-                    @click=${() => { this.dismissNotification(notification.id); }}
-                  >×</button>
-                </article>
-              `;
-            })}
-          </div>
-        `}
+        <div class="notification-list" id="session-notification-list" ?hidden=${collapsed}>
+          ${inbox.discardedCount === 0 ? null : html`
+            <p class="notification-overflow">${notificationInboxOverflowLabel(inbox.discardedCount)}</p>
+          `}
+          ${inbox.notifications.map((notification) => {
+            const label = notificationSeverityLabel(notification.severity);
+            const truncationLabel = notificationMessageTruncationLabel(notification);
+            return html`
+              <article class=${`notification-row ${notification.severity}`} data-notification-id=${notification.id} tabindex="-1">
+                <div class="notification-metadata">
+                  <strong class="notification-severity">${label}</strong>
+                  <span aria-hidden="true">·</span>
+                  <time datetime=${notification.receivedAt}>${notificationTimestampFormatter.format(new Date(notification.receivedAt))}</time>
+                </div>
+                <p class="notification-message" dir="auto">${notification.message}</p>
+                ${truncationLabel === undefined ? null : html`<p class="notification-truncated">${truncationLabel}</p>`}
+                <button
+                  type="button"
+                  class="notification-row-dismiss"
+                  aria-label=${notificationDismissLabel(notification)}
+                  title="Dismiss notification"
+                  ?disabled=${inbox.pendingDismissedIds.has(notification.id) || inbox.dismissAllPending || this.onDismissNotification === undefined}
+                  @click=${() => { this.dismissNotification(notification.id); }}
+                >${renderNotificationCloseIcon()}</button>
+              </article>
+            `;
+          })}
+        </div>
       </section>
     `;
   }
@@ -399,42 +451,64 @@ export class ChatView extends LitElement {
     const polite = announcements.filter((announcement) => announcement.severity !== "error");
     const assertive = announcements.filter((announcement) => announcement.severity === "error");
     return html`
-      <div class="visually-hidden notification-live" aria-live="polite" aria-atomic="false">${repeat(polite, (announcement) => announcement.id, (announcement) => html`<span data-announcement-id=${announcement.id}>${notificationSeverityLabel(announcement.severity)} notification: ${announcement.message}</span>`)}</div>
-      <div class="visually-hidden notification-live" aria-live="assertive" aria-atomic="false">${repeat(assertive, (announcement) => announcement.id, (announcement) => html`<span data-announcement-id=${announcement.id}>Error notification: ${announcement.message}</span>`)}</div>
+      <div class="visually-hidden notification-live" aria-live="polite" aria-atomic="false">${repeat(polite, (announcement) => announcement.id, (announcement) => html`<span data-announcement-id=${announcement.id}>${notificationAnnouncementLabel(announcement)}</span>`)}</div>
+      <div class="visually-hidden notification-live" aria-live="assertive" aria-atomic="false">${repeat(assertive, (announcement) => announcement.id, (announcement) => html`<span data-announcement-id=${announcement.id}>${notificationAnnouncementLabel(announcement)}</span>`)}</div>
     `;
   }
 
-  private toggleNotificationTray(collapsed: boolean): void {
-    this.collapsedNotificationSessionIds = setNotificationTrayCollapsed(this.collapsedNotificationSessionIds, this.sessionId, !collapsed);
+  private toggleNotificationTray(inbox: SelectedSessionNotificationView, collapsed: boolean): void {
+    this.collapsedNotificationTargetKeys = setNotificationTrayCollapsed(this.collapsedNotificationTargetKeys, inbox, !collapsed);
   }
 
   private dismissNotification(notificationId: string): void {
     const inbox = this.notificationInbox;
-    if (inbox === undefined) return;
-    this.pendingNotificationFocus = notificationFocusTargetAfterDismiss(inbox.notifications, notificationId);
-    if (this.pendingNotificationFocus.kind === "header") this.retainedEmptyNotificationTraySessionId = this.sessionId;
-    this.onDismissNotification?.(notificationId);
+    if (inbox === undefined || this.onDismissNotification === undefined) return;
+    const focusTarget = notificationFocusTargetAfterDismiss(inbox.notifications, notificationId);
+    const chatKey = notificationTargetKey(inbox);
+    this.pendingNotificationFocus = { chatKey, focusTarget };
+    if (focusTarget.kind === "header") this.retainedEmptyNotificationTrayTargetKey = chatKey;
+    this.onDismissNotification(notificationId);
+  }
+
+  private dismissAllNotifications(): void {
+    const inbox = this.notificationInbox;
+    if (inbox === undefined || this.onDismissAllNotifications === undefined) return;
+    const chatKey = notificationTargetKey(inbox);
+    this.pendingNotificationFocus = { chatKey, focusTarget: { kind: "header" } };
+    this.retainedEmptyNotificationTrayTargetKey = chatKey;
+    this.onDismissAllNotifications();
   }
 
   private releaseEmptyNotificationTray(event: FocusEvent): void {
     const tray = event.currentTarget;
     const next = event.relatedTarget;
     if (tray instanceof HTMLElement && next instanceof Node && tray.contains(next)) return;
+    // Removing the activated row can emit focusout before updated() moves focus.
+    if (this.pendingNotificationFocus !== undefined) return;
     const inbox = this.notificationInbox;
-    if (this.retainedEmptyNotificationTraySessionId === this.sessionId && inbox?.retainedCount === 0 && inbox.discardedCount === 0) this.retainedEmptyNotificationTraySessionId = undefined;
+    if (inbox !== undefined
+      && this.retainedEmptyNotificationTrayTargetKey === notificationTargetKey(inbox)
+      && notificationInboxTotalCount(inbox) === 0) this.retainedEmptyNotificationTrayTargetKey = undefined;
   }
 
   private focusPendingNotificationTarget(): void {
-    const target = this.pendingNotificationFocus;
+    const pending = this.pendingNotificationFocus;
     this.pendingNotificationFocus = undefined;
-    if (target === undefined) return;
+    const inbox = this.notificationInbox;
+    if (pending === undefined || inbox === undefined || notificationTargetKey(inbox) !== pending.chatKey) return;
+    const target = pending.focusTarget;
     if (target.kind === "header") {
       this.renderRoot.querySelector<HTMLElement>("[data-notification-focus='header']")?.focus();
       return;
     }
-    const card = Array.from(this.renderRoot.querySelectorAll<HTMLElement>("[data-notification-id]"))
+    const row = Array.from(this.renderRoot.querySelectorAll<HTMLElement>("[data-notification-id]"))
       .find((candidate) => candidate.dataset["notificationId"] === target.notificationId);
-    (card ?? this.renderRoot.querySelector<HTMLElement>("[data-notification-focus='header']"))?.focus();
+    if (row !== undefined) {
+      row.focus();
+      return;
+    }
+    if (notificationInboxTotalCount(inbox) === 0) this.retainedEmptyNotificationTrayTargetKey = pending.chatKey;
+    this.renderRoot.querySelector<HTMLElement>("[data-notification-focus='header']")?.focus();
   }
 
   private renderWarnings() {

@@ -1,7 +1,11 @@
 import type { TemplateResult } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { QueuedSessionMessage, SessionStatus, SessionWarning } from "../api";
-import type { SelectedSessionNotificationView } from "../sessionNotifications";
+import {
+  notificationTargetKey,
+  notificationTrayIsCollapsed,
+  type SelectedSessionNotificationView,
+} from "../sessionNotifications";
 import type { ChatLine } from "./shared";
 import {
   ChatView,
@@ -144,35 +148,79 @@ describe("ChatView session-warning dismiss wiring", () => {
 
 describe("ChatView notification tray wiring", () => {
   // Escape hatch: these cases verify only the tray buttons' Lit callback wiring.
-  // Notification content, ordering, severity, collapse, and focus decisions are
-  // covered through pure seams; the node test environment has no shadow-DOM
-  // harness, so semantic class markers keep direct handler extraction narrow.
-  it("wires individual and dismiss-all actions to their injected callbacks", () => {
+  // Content and identity decisions use pure seams; Vitest has no shadow-DOM
+  // harness, so stable semantic class markers keep handler extraction narrow.
+  // A minimal render-root fake verifies the resulting focus move without
+  // recreating a browser DOM harness.
+  it("wires individual dismissal and recovers header focus after the final row", () => {
     const view = withNotificationInbox(new ChatView());
     const onDismissNotification = vi.fn();
-    const onDismissAllNotifications = vi.fn();
+    const headerFocus = installNotificationFocusRoot(view);
     view.onDismissNotification = onDismissNotification;
+
+    const rendered = renderNotificationTray(view);
+    if (rendered === null) throw new Error("expected a notification tray");
+    templateEventHandlerAfterMarker(rendered, "notification-row-dismiss")(new Event("click"));
+    view.notificationInbox = emptyNotificationInbox(requireNotificationInbox(view));
+
+    expect(renderNotificationTray(view)).not.toBeNull();
+    focusPendingNotificationTarget(view);
+    expect(onDismissNotification).toHaveBeenCalledExactlyOnceWith("daemon-a:1");
+    expect(headerFocus).toHaveBeenCalledOnce();
+  });
+
+  it("wires clear-all and recovers header focus while the emptied tray is retained", () => {
+    const view = withNotificationInbox(new ChatView());
+    const onDismissAllNotifications = vi.fn();
+    const headerFocus = installNotificationFocusRoot(view);
     view.onDismissAllNotifications = onDismissAllNotifications;
 
     const rendered = renderNotificationTray(view);
     if (rendered === null) throw new Error("expected a notification tray");
-    templateEventHandlerAfterMarker(rendered, "notification-card-dismiss")(new Event("click"));
-    templateEventHandlerAfterMarker(rendered, "notification-dismiss-all")(new Event("click"));
+    templateEventHandlerAfterMarker(rendered, "notification-clear")(new Event("click"));
+    view.notificationInbox = emptyNotificationInbox(requireNotificationInbox(view));
 
-    expect(onDismissNotification).toHaveBeenCalledExactlyOnceWith("daemon-a:1");
+    expect(renderNotificationTray(view)).not.toBeNull();
+    focusPendingNotificationTarget(view);
     expect(onDismissAllNotifications).toHaveBeenCalledOnce();
+    expect(headerFocus).toHaveBeenCalledOnce();
   });
 
-  it("wires the real expand/collapse button to component-local collapse state", () => {
+  it("does not move pending dismissal focus into another exact chat", () => {
     const view = withNotificationInbox(new ChatView());
+    const headerFocus = installNotificationFocusRoot(view);
+    view.onDismissAllNotifications = vi.fn();
+
+    const rendered = renderNotificationTray(view);
+    if (rendered === null) throw new Error("expected a notification tray");
+    templateEventHandlerAfterMarker(rendered, "notification-clear")(new Event("click"));
+    view.notificationInbox = { ...requireNotificationInbox(view), machineId: "remote" };
+    focusPendingNotificationTarget(view);
+
+    expect(headerFocus).not.toHaveBeenCalled();
+  });
+
+  it("keeps a collapsed tray closed for new arrivals and isolates matching session ids by exact chat", () => {
+    const view = withNotificationInbox(new ChatView());
+    const inbox = requireNotificationInbox(view);
     const rendered = renderNotificationTray(view);
     if (rendered === null) throw new Error("expected a notification tray");
 
     templateEventHandlerAfterMarker(rendered, "notification-toggle")(new Event("click"));
 
-    const collapsedSessionIds: unknown = Reflect.get(view, "collapsedNotificationSessionIds");
-    if (!(collapsedSessionIds instanceof Set)) throw new Error("Expected collapsed notification session ids");
-    expect(collapsedSessionIds.has("session-1")).toBe(true);
+    const collapsedTargetKeys: unknown = Reflect.get(view, "collapsedNotificationTargetKeys");
+    if (!(collapsedTargetKeys instanceof Set)) throw new Error("Expected collapsed notification target keys");
+    const firstNotification = inbox.notifications[0];
+    if (firstNotification === undefined) throw new Error("expected a retained notification");
+    const newArrival = {
+      ...inbox,
+      notifications: [{ ...firstNotification, id: "daemon-a:2", order: 2 }, ...inbox.notifications],
+      retainedCount: 2,
+    };
+    expect(notificationTrayIsCollapsed(collapsedTargetKeys, newArrival)).toBe(true);
+    expect(notificationTrayIsCollapsed(collapsedTargetKeys, { ...newArrival, cwd: "/other" })).toBe(false);
+    expect(notificationTrayIsCollapsed(collapsedTargetKeys, { ...newArrival, machineId: "remote" })).toBe(false);
+    expect(collapsedTargetKeys.has(notificationTargetKey(inbox))).toBe(true);
   });
 });
 
@@ -268,6 +316,7 @@ type RenderMessageGroup = (this: ChatView, messages: ChatLine[], startIndex: num
 type RenderMessageGroupBody = (this: ChatView, messages: ChatLine[], startIndex: number) => TemplateResult;
 type RenderWarnings = (this: ChatView) => TemplateResult | null;
 type RenderNotificationTray = (this: ChatView) => TemplateResult | null;
+type FocusPendingNotificationTarget = (this: ChatView) => void;
 type TemplateEventHandler = (event: Event) => void;
 
 function renderQueuedMessages(view: ChatView): TemplateResult {
@@ -292,6 +341,12 @@ function renderNotificationTray(view: ChatView): TemplateResult | null {
   const method: unknown = Reflect.get(view, "renderNotificationTray");
   if (!isRenderNotificationTray(method)) throw new Error("ChatView.renderNotificationTray is not callable");
   return method.call(view);
+}
+
+function focusPendingNotificationTarget(view: ChatView): void {
+  const method: unknown = Reflect.get(view, "focusPendingNotificationTarget");
+  if (!isFocusPendingNotificationTarget(method)) throw new Error("ChatView.focusPendingNotificationTarget is not callable");
+  method.call(view);
 }
 
 function observeGroupBodyRenders(view: ChatView): GroupBodyRenderCall[] {
@@ -323,6 +378,10 @@ function isRenderWarnings(value: unknown): value is RenderWarnings {
 }
 
 function isRenderNotificationTray(value: unknown): value is RenderNotificationTray {
+  return typeof value === "function";
+}
+
+function isFocusPendingNotificationTarget(value: unknown): value is FocusPendingNotificationTarget {
   return typeof value === "function";
 }
 
@@ -380,6 +439,34 @@ function withNotificationInbox(view: ChatView): ChatView {
   view.sessionId = notificationInbox.sessionId;
   view.notificationInbox = notificationInbox;
   return view;
+}
+
+function requireNotificationInbox(view: ChatView): SelectedSessionNotificationView {
+  if (view.notificationInbox === undefined) throw new Error("expected a notification inbox");
+  return view.notificationInbox;
+}
+
+function emptyNotificationInbox(inbox: SelectedSessionNotificationView): SelectedSessionNotificationView {
+  const empty: SelectedSessionNotificationView = {
+    ...inbox,
+    notifications: [],
+    retainedCount: 0,
+    discardedCount: 0,
+    pendingDismissedIds: new Set(),
+    dismissAllPending: false,
+  };
+  delete empty.highestSeverity;
+  return empty;
+}
+
+function installNotificationFocusRoot(view: ChatView): ReturnType<typeof vi.fn> {
+  const headerFocus = vi.fn();
+  const renderRoot = {
+    querySelector: (selector: string) => selector === "[data-notification-focus='header']" ? { focus: headerFocus } : null,
+    querySelectorAll: () => [],
+  };
+  if (!Reflect.set(view, "renderRoot", renderRoot)) throw new Error("Could not install notification focus root");
+  return headerFocus;
 }
 
 function warningStatus(warnings: SessionWarning[]): SessionStatus {

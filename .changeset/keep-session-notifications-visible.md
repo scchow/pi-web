@@ -2,4 +2,4 @@
 "@jmfederico/pi-web": patch
 ---
 
-Keep extension notifications discoverable in a session-scoped inbox with background badges, reconnect recovery, and explicit dismissal.
+Show extension notifications in a compact, dismissible tray for the selected chat, with reconnect recovery and per-chat collapse state.

@@ -2,24 +2,14 @@ import {
   SESSION_NOTIFICATION_LIMIT,
   SESSION_NOTIFICATION_MESSAGE_BYTES,
   type SessionNotification,
-  type SessionNotificationCatalogSnapshot,
   type SessionNotificationDismissThrough,
   type SessionNotificationInboxEvent,
   type SessionNotificationInboxSnapshot,
   type SessionNotificationSeverity,
   type SessionNotificationSummary,
-  type SessionNotificationSummaryEvent,
 } from "../../shared/apiTypes";
 
 export type SessionNotificationProjectionStatus = "loading" | "fresh" | "stale";
-
-export interface SessionNotificationCatalogProjection {
-  machineId: string;
-  status: SessionNotificationProjectionStatus;
-  daemonInstanceId?: string;
-  catalogRevision: number;
-  summariesBySessionId: Record<string, SessionNotificationSummary>;
-}
 
 export interface SessionNotificationTarget {
   machineId: string;
@@ -57,19 +47,6 @@ export interface SelectedSessionNotificationView extends SessionNotificationTarg
   announcements: SessionNotificationAnnouncement[];
 }
 
-export interface SessionNotificationAggregate {
-  retainedCount: number;
-  discardedCount: number;
-  highestSeverity?: SessionNotificationSeverity;
-}
-
-export interface SessionNotificationBadgeModel extends SessionNotificationAggregate {
-  text: string;
-  severity: SessionNotificationSeverity;
-  icon: string;
-  accessibleLabel: string;
-}
-
 export interface NotificationReducerResult<T> {
   value: T;
   needsRefresh: boolean;
@@ -87,55 +64,6 @@ export function loadingSelectedNotificationInbox(target: SessionNotificationTarg
     dismissThrough: emptyDismissThrough,
     optimisticDismissedIds: [],
     announcements: [],
-  };
-}
-
-export function freshNotificationCatalog(machineId: string, snapshot: SessionNotificationCatalogSnapshot): SessionNotificationCatalogProjection {
-  return {
-    machineId,
-    status: "fresh",
-    daemonInstanceId: snapshot.daemonInstanceId,
-    catalogRevision: snapshot.catalogRevision,
-    summariesBySessionId: Object.fromEntries(snapshot.sessions.map((summary) => [summary.sessionId, summary])),
-  };
-}
-
-export function applyNotificationCatalogEvent(
-  current: SessionNotificationCatalogProjection | undefined,
-  machineId: string,
-  event: SessionNotificationSummaryEvent,
-): NotificationReducerResult<SessionNotificationCatalogProjection> {
-  if (current?.machineId !== machineId) {
-    return {
-      value: staleNotificationCatalog(machineId),
-      needsRefresh: true,
-      changed: true,
-    };
-  }
-  if (current.daemonInstanceId !== event.daemonInstanceId) {
-    return {
-      value: staleNotificationCatalog(machineId),
-      needsRefresh: true,
-      changed: current.status !== "stale" || current.daemonInstanceId !== undefined || Object.keys(current.summariesBySessionId).length > 0,
-    };
-  }
-  if (event.catalogRevision <= current.catalogRevision) return { value: current, needsRefresh: false, changed: false };
-  if (current.status !== "fresh" || event.catalogRevision !== current.catalogRevision + 1) {
-    const stale = { ...current, status: "stale" as const };
-    return { value: stale, needsRefresh: true, changed: current.status !== "stale" };
-  }
-
-  const summariesBySessionId = notificationSummaryIsEmpty(event.summary)
-    ? omitRecordKey(current.summariesBySessionId, event.summary.sessionId)
-    : { ...current.summariesBySessionId, [event.summary.sessionId]: event.summary };
-  return {
-    value: {
-      ...current,
-      catalogRevision: event.catalogRevision,
-      summariesBySessionId,
-    },
-    needsRefresh: false,
-    changed: true,
   };
 }
 
@@ -264,84 +192,31 @@ export function selectedNotificationView(inbox: SelectedSessionNotificationInbox
   };
 }
 
-export function notificationSummaryFromSelectedView(view: SelectedSessionNotificationView, inboxRevision: number): SessionNotificationSummary {
-  return {
-    sessionId: view.sessionId,
-    cwd: view.cwd,
-    inboxRevision,
-    retainedCount: view.retainedCount,
-    discardedCount: view.discardedCount,
-    ...optionalSeverity(view.highestSeverity),
-  };
-}
-
-export function effectiveNotificationSummaries(
-  catalog: SessionNotificationCatalogProjection | undefined,
-  selectedInbox?: SelectedSessionNotificationInbox,
-): SessionNotificationSummary[] {
-  if (catalog?.status !== "fresh") return [];
-  const summaries = { ...catalog.summariesBySessionId };
-  const selected = selectedNotificationView(selectedInbox);
-  if (selected?.machineId !== catalog.machineId || selectedInbox?.summary === undefined) return Object.values(summaries);
-  const summary = notificationSummaryFromSelectedView(selected, selectedInbox.summary.inboxRevision);
-  return Object.values(notificationSummaryIsEmpty(summary)
-    ? omitRecordKey(summaries, summary.sessionId)
-    : { ...summaries, [summary.sessionId]: summary });
-}
-
-export function aggregateNotificationSummaries(summaries: readonly SessionNotificationSummary[]): SessionNotificationAggregate {
-  return summaries.reduce<SessionNotificationAggregate>((aggregate, summary) => ({
-    retainedCount: aggregate.retainedCount + summary.retainedCount,
-    discardedCount: aggregate.discardedCount + summary.discardedCount,
-    ...optionalSeverity(higherNotificationSeverity(aggregate.highestSeverity, summary.highestSeverity)),
-  }), { retainedCount: 0, discardedCount: 0 });
-}
-
-export function notificationAggregateForCwd(summaries: readonly SessionNotificationSummary[], cwd: string): SessionNotificationAggregate {
-  return aggregateNotificationSummaries(summaries.filter((summary) => summary.cwd === cwd));
-}
-
-export function notificationAggregateForProject(
-  summaries: readonly SessionNotificationSummary[],
-  workspacePaths: ReadonlySet<string>,
-): SessionNotificationAggregate {
-  return aggregateNotificationSummaries(summaries.filter((summary) => workspacePaths.has(summary.cwd)));
-}
-
-export function notificationAggregateAcrossMachines(
-  catalogsByMachine: Readonly<Record<string, SessionNotificationCatalogProjection>>,
-  selectedInbox?: SelectedSessionNotificationInbox,
-): SessionNotificationAggregate {
-  return aggregateNotificationSummaries(Object.values(catalogsByMachine).flatMap((catalog) => effectiveNotificationSummaries(catalog, selectedInbox)));
-}
-
-export function notificationBadgeModel(aggregate: SessionNotificationAggregate): SessionNotificationBadgeModel | undefined {
-  if (aggregate.retainedCount === 0 && aggregate.discardedCount === 0) return undefined;
-  const severity = aggregate.highestSeverity ?? "info";
-  const notificationNoun = aggregate.retainedCount === 1 ? "notification" : "notifications";
-  const discardedNoun = aggregate.discardedCount === 1 ? "notification" : "notifications";
-  const accessibleParts = [`${String(aggregate.retainedCount)} undismissed ${notificationNoun}`];
-  if (aggregate.discardedCount > 0) accessibleParts.push(`${String(aggregate.discardedCount)} older ${discardedNoun} discarded`);
-  accessibleParts.push(`highest severity ${severity}`);
-  return {
-    ...aggregate,
-    severity,
-    icon: notificationSeverityIcon(severity),
-    text: `${String(aggregate.retainedCount)}${aggregate.discardedCount > 0 ? "+" : ""}`,
-    accessibleLabel: accessibleParts.join(", "),
-  };
-}
-
 export function notificationSeverityLabel(severity: SessionNotificationSeverity): "Info" | "Warning" | "Error" {
   if (severity === "error") return "Error";
   if (severity === "warning") return "Warning";
   return "Info";
 }
 
-export function notificationSeverityIcon(severity: SessionNotificationSeverity): string {
-  if (severity === "error") return "⛔";
-  if (severity === "warning") return "⚠";
-  return "ℹ";
+export function notificationAnnouncementLabel(announcement: Pick<SessionNotificationAnnouncement, "severity">): string {
+  return `${notificationSeverityLabel(announcement.severity)} notification received.`;
+}
+
+export function notificationInboxTotalCount(inbox: Pick<SelectedSessionNotificationView, "retainedCount" | "discardedCount">): number {
+  return inbox.retainedCount + inbox.discardedCount;
+}
+
+export function notificationTrayHeading(inbox: Pick<SelectedSessionNotificationView, "retainedCount" | "discardedCount">): string {
+  return `Notifications (${String(notificationInboxTotalCount(inbox))})`;
+}
+
+export function notificationDismissLabel(notification: Pick<SessionNotification, "message" | "severity">): string {
+  const message = notification.message.replace(/\s+/gu, " ").trim();
+  if (message === "") return `Dismiss ${notificationSeverityLabel(notification.severity).toLowerCase()} notification`;
+  const maxCharacters = 80;
+  const characters = Array.from(message);
+  const summary = characters.length <= maxCharacters ? message : `${characters.slice(0, maxCharacters - 1).join("").trimEnd()}…`;
+  return `Dismiss notification: ${summary}`;
 }
 
 export type NotificationFocusTarget = { kind: "notification"; notificationId: string } | { kind: "header" };
@@ -355,32 +230,37 @@ export function notificationFocusTargetAfterDismiss(notifications: readonly Sess
   return previous === undefined ? { kind: "header" } : { kind: "notification", notificationId: previous.id };
 }
 
-export function setNotificationTrayCollapsed(collapsedSessionIds: ReadonlySet<string>, sessionId: string, collapsed: boolean): ReadonlySet<string> {
-  const next = new Set(collapsedSessionIds);
-  if (collapsed) next.add(sessionId);
-  else next.delete(sessionId);
+export function notificationTargetKey(target: SessionNotificationTarget): string {
+  return JSON.stringify([target.machineId, target.cwd, target.sessionId]);
+}
+
+export function notificationTrayIsCollapsed(collapsedTargetKeys: ReadonlySet<string>, target: SessionNotificationTarget): boolean {
+  return collapsedTargetKeys.has(notificationTargetKey(target));
+}
+
+export function setNotificationTrayCollapsed(collapsedTargetKeys: ReadonlySet<string>, target: SessionNotificationTarget, collapsed: boolean): ReadonlySet<string> {
+  const next = new Set(collapsedTargetKeys);
+  const key = notificationTargetKey(target);
+  if (collapsed) next.add(key);
+  else next.delete(key);
   return next;
 }
 
 export function notificationInboxOverflowLabel(discardedCount: number): string {
-  return `${String(discardedCount)} older ${discardedCount === 1 ? "notification was" : "notifications were"} discarded because this inbox keeps the latest ${String(SESSION_NOTIFICATION_LIMIT)}.`;
+  return `${String(discardedCount)} older ${discardedCount === 1 ? "notification" : "notifications"} not shown.`;
 }
 
 export function notificationMessageTruncationLabel(notification: Pick<SessionNotification, "truncated">): string | undefined {
   if (!notification.truncated) return undefined;
   const kibibytes = SESSION_NOTIFICATION_MESSAGE_BYTES / 1024;
-  return `Message truncated to the ${String(kibibytes)} KiB notification limit.`;
+  return `Message truncated at ${String(kibibytes)} KiB.`;
 }
 
 export function notificationTargetsEqual(left: SessionNotificationTarget, right: SessionNotificationTarget): boolean {
   return left.machineId === right.machineId && left.sessionId === right.sessionId && left.cwd === right.cwd;
 }
 
-export function notificationSummaryIsEmpty(summary: SessionNotificationSummary): boolean {
-  return summary.retainedCount === 0 && summary.discardedCount === 0;
-}
-
-export function higherNotificationSeverity(
+function higherNotificationSeverity(
   left: SessionNotificationSeverity | undefined,
   right: SessionNotificationSeverity | undefined,
 ): SessionNotificationSeverity | undefined {
@@ -388,15 +268,6 @@ export function higherNotificationSeverity(
   if (left === "warning" || right === "warning") return "warning";
   if (left === "info" || right === "info") return "info";
   return undefined;
-}
-
-function staleNotificationCatalog(machineId: string): SessionNotificationCatalogProjection {
-  return {
-    machineId,
-    status: "stale",
-    catalogRevision: 0,
-    summariesBySessionId: {},
-  };
 }
 
 function staleSelectedNotificationInbox(target: SessionNotificationTarget): SelectedSessionNotificationInbox {
@@ -421,10 +292,6 @@ function effectiveDiscardedCount(discardedCount: number, overflowWatermark: numb
   const firstWatermark = overflowWatermark - discardedCount + 1;
   const acknowledged = Math.max(0, Math.min(discardedCount, throughOverflowWatermark - firstWatermark + 1));
   return discardedCount - acknowledged;
-}
-
-function omitRecordKey<T>(record: Readonly<Record<string, T>>, key: string): Record<string, T> {
-  return Object.fromEntries(Object.entries(record).filter(([candidate]) => candidate !== key));
 }
 
 function optionalSeverity(severity: SessionNotificationSeverity | undefined): { highestSeverity?: SessionNotificationSeverity } {

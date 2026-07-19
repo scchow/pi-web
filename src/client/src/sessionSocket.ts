@@ -1,8 +1,12 @@
 import { realtimeEvents, sessionEvents } from "./api";
-import { parseSessionNotificationInboxEvent, parseSessionNotificationSummaryEvent } from "./api/parsers";
+import { parseSessionNotificationInboxEvent } from "./api/parsers";
 import type { GlobalSessionEvent, RealtimeEvent, SessionRef, SessionUiEvent } from "../../shared/apiTypes";
 
 export type { GlobalSessionEvent, RealtimeEvent, SessionUiEvent } from "../../shared/apiTypes";
+
+export type BrowserRealtimeEvent = Exclude<RealtimeEvent, { type: "notifications.summary" }>;
+type BrowserGlobalSessionEvent = Exclude<GlobalSessionEvent, { type: "notifications.summary" }>;
+type NonGlobalBrowserRealtimeEvent = Exclude<BrowserRealtimeEvent, BrowserGlobalSessionEvent>;
 
 export class SessionSocket {
   private socket: WebSocket | undefined;
@@ -90,14 +94,14 @@ export class SessionSocket {
 
 export class RealtimeSocket {
   private socket: WebSocket | undefined;
-  private onEvent: ((event: RealtimeEvent) => void) | undefined;
+  private onEvent: ((event: BrowserRealtimeEvent) => void) | undefined;
   private onOpen: (() => void) | undefined;
   private reconnectTimer?: number;
   private reconnectDelay = 500;
   private shouldReconnect = false;
   private machineId = "local";
 
-  connect(onEvent: (event: RealtimeEvent) => void, onOpen?: () => void, machineId = "local"): void {
+  connect(onEvent: (event: BrowserRealtimeEvent) => void, onOpen?: () => void, machineId = "local"): void {
     this.close();
     this.machineId = machineId;
     this.onEvent = onEvent;
@@ -154,9 +158,7 @@ export function parseSessionSocketEvent(event: unknown): SessionUiEvent | undefi
   return isLegacySessionUiEvent(event) ? event : undefined;
 }
 
-export function parseRealtimeSocketEvent(event: unknown): RealtimeEvent | undefined {
-  const type = eventType(event);
-  if (type === "notifications.summary") return safelyParseNotificationEvent(() => parseSessionNotificationSummaryEvent(event));
+export function parseRealtimeSocketEvent(event: unknown): BrowserRealtimeEvent | undefined {
   if (isLegacyGlobalSessionEvent(event) || isLegacyRealtimeEvent(event)) return event;
   return undefined;
 }
@@ -165,12 +167,12 @@ function isLegacySessionUiEvent(event: unknown): event is SessionUiEvent {
   return ["message.append", "assistant.delta", "assistant.thinking.delta", "tool.start", "tool.update", "tool.end", "shell.start", "shell.chunk", "shell.end", "agent.start", "agent.end", "message.end", "status.update", "activity.update", "command.output", "session.error", "session.name", "session.created", "pi.event"].includes(eventType(event));
 }
 
-function isLegacyGlobalSessionEvent(event: unknown): event is GlobalSessionEvent {
+function isLegacyGlobalSessionEvent(event: unknown): event is BrowserGlobalSessionEvent {
   const type = eventType(event);
   return type === "status.update" || type === "activity.update" || type === "session.name" || type === "session.created";
 }
 
-function isLegacyRealtimeEvent(event: unknown): event is RealtimeEvent {
+function isLegacyRealtimeEvent(event: unknown): event is NonGlobalBrowserRealtimeEvent {
   const type = eventType(event);
   return type === "terminal.created" || type === "terminal.exited" || type === "terminal.closed" || type === "workspace.activity";
 }

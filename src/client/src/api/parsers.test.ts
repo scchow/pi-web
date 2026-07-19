@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PI_WEB_CAPABILITIES } from "../../../shared/capabilities";
 import { SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES } from "../../../shared/apiTypes";
-import { parseAuthProvidersResponse, parseCommandResult, parseFileContentResponse, parseFileSuggestion, parseGitStatusResponse, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionNotificationCatalogSnapshot, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionNotificationSummaryEvent, parseSessionStatus, parseSessionStreamSnapshot, parseSlashCommand, parseTerminalCommandRun, parseTerminalInfo, parseWorkspace, parseWorkspaceActivityResponse } from "./parsers";
+import { parseAuthProvidersResponse, parseCommandResult, parseFileContentResponse, parseFileSuggestion, parseGitStatusResponse, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStatus, parseSessionStreamSnapshot, parseSlashCommand, parseTerminalCommandRun, parseTerminalInfo, parseWorkspace, parseWorkspaceActivityResponse } from "./parsers";
 
 describe("API parsers", () => {
   it("preserves additive interactive API-key flow hints and defaults legacy options", () => {
@@ -514,14 +514,9 @@ describe("API parsers", () => {
     expect(() => parseCommandResult({ type: "later" })).toThrow("Invalid command result type");
   });
 
-  it("strictly parses notification snapshots and realtime events", () => {
+  it("strictly parses selected notification snapshots and realtime events", () => {
     const inbox = notificationInboxWire();
 
-    expect(parseSessionNotificationCatalogSnapshot({
-      daemonInstanceId: "daemon-a",
-      catalogRevision: 1,
-      sessions: [inbox.summary],
-    })).toMatchObject({ daemonInstanceId: "daemon-a", sessions: [{ sessionId: "session-1" }] });
     expect(parseSessionNotificationInboxSnapshot(inbox)).toEqual(inbox);
     expect(parseSessionNotificationInboxEvent({
       type: "notifications.inbox",
@@ -531,12 +526,6 @@ describe("API parsers", () => {
       dismissThrough: { order: 2, overflowWatermark: 0 },
       delta: { kind: "added", notification: notificationWire(2, "warning") },
     })).toMatchObject({ type: "notifications.inbox", delta: { kind: "added", notification: { severity: "warning" } } });
-    expect(parseSessionNotificationSummaryEvent({
-      type: "notifications.summary",
-      daemonInstanceId: "daemon-a",
-      catalogRevision: 2,
-      summary: { ...inbox.summary, inboxRevision: 2 },
-    })).toMatchObject({ type: "notifications.summary", catalogRevision: 2 });
   });
 
   it("rejects malformed, unsafe, over-cap, and oversized notification payloads", () => {
@@ -545,10 +534,9 @@ describe("API parsers", () => {
       ...inbox,
       notifications: [{ ...notificationWire(1), severity: "fatal" }],
     })).toThrow("Invalid notification severity");
-    expect(() => parseSessionNotificationCatalogSnapshot({
-      daemonInstanceId: "daemon-a",
+    expect(() => parseSessionNotificationInboxSnapshot({
+      ...inbox,
       catalogRevision: Number.MAX_SAFE_INTEGER + 1,
-      sessions: [],
     })).toThrow("safe integer");
     expect(() => parseSessionNotificationInboxSnapshot({
       ...inbox,

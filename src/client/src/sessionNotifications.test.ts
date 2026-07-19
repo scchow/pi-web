@@ -4,24 +4,22 @@ import type {
   SessionNotificationInboxEvent,
   SessionNotificationInboxSnapshot,
   SessionNotificationSummary,
-  SessionNotificationSummaryEvent,
 } from "../../shared/apiTypes";
 import {
-  aggregateNotificationSummaries,
-  applyNotificationCatalogEvent,
   applySelectedNotificationEvent,
-  effectiveNotificationSummaries,
-  freshNotificationCatalog,
   installSelectedNotificationSnapshot,
-  notificationAggregateAcrossMachines,
-  notificationAggregateForCwd,
-  notificationAggregateForProject,
-  notificationBadgeModel,
+  notificationAnnouncementLabel,
+  notificationDismissLabel,
   notificationFocusTargetAfterDismiss,
   notificationInboxOverflowLabel,
+  notificationInboxTotalCount,
   notificationMessageTruncationLabel,
+  notificationTargetKey,
+  notificationTrayHeading,
+  notificationTrayIsCollapsed,
   selectedNotificationView,
   setNotificationTrayCollapsed,
+  type SessionNotificationAnnouncement,
   type SessionNotificationTarget,
 } from "./sessionNotifications";
 
@@ -70,15 +68,6 @@ function addedEvent(entry: SessionNotification, inboxRevision: number, catalogRe
     summary: summary({ inboxRevision, retainedCount: notifications.length, ...optionalHighestSeverity(notifications) }),
     dismissThrough: { order: entry.order, overflowWatermark: 0 },
     delta: { kind: "added", notification: entry },
-  };
-}
-
-function summaryEvent(catalogRevision: number, overrides: Partial<SessionNotificationSummary> = {}): SessionNotificationSummaryEvent {
-  return {
-    type: "notifications.summary",
-    daemonInstanceId: "daemon-a",
-    catalogRevision,
-    summary: summary({ inboxRevision: catalogRevision, ...overrides }),
   };
 }
 
@@ -161,62 +150,6 @@ describe("selected notification projection", () => {
   });
 });
 
-describe("notification catalog revisions and aggregates", () => {
-  it("applies monotonic summaries idempotently and requests one recovery on a gap or daemon change", () => {
-    const catalog = freshNotificationCatalog("local", {
-      daemonInstanceId: "daemon-a",
-      catalogRevision: 1,
-      sessions: [summary()],
-    });
-    const next = applyNotificationCatalogEvent(catalog, "local", summaryEvent(2, { retainedCount: 2, highestSeverity: "warning" }));
-    const duplicate = applyNotificationCatalogEvent(next.value, "local", summaryEvent(2, { retainedCount: 2, highestSeverity: "warning" }));
-    const gap = applyNotificationCatalogEvent(next.value, "local", summaryEvent(4));
-    const restarted = applyNotificationCatalogEvent(next.value, "local", { ...summaryEvent(1), daemonInstanceId: "daemon-b" });
-
-    expect(next.value.summariesBySessionId["session-1"]).toMatchObject({ retainedCount: 2, highestSeverity: "warning" });
-    expect(duplicate.changed).toBe(false);
-    expect(gap).toMatchObject({ needsRefresh: true, value: { status: "stale" } });
-    expect(restarted.value).toMatchObject({ status: "stale", summariesBySessionId: {} });
-    expect(restarted.value).not.toHaveProperty("daemonInstanceId");
-  });
-
-  it("keeps matching session ids isolated by machine and excludes stale catalogs", () => {
-    const local = freshNotificationCatalog("local", {
-      daemonInstanceId: "daemon-a",
-      catalogRevision: 1,
-      sessions: [summary({ retainedCount: 2, discardedCount: 1, highestSeverity: "warning" })],
-    });
-    const remote = freshNotificationCatalog("remote", {
-      daemonInstanceId: "daemon-r",
-      catalogRevision: 9,
-      sessions: [summary({ cwd: "/remote", retainedCount: 3, discardedCount: 0, highestSeverity: "error" })],
-    });
-    const staleRemote = { ...remote, status: "stale" as const };
-
-    expect(notificationAggregateAcrossMachines({ local, remote })).toEqual({ retainedCount: 5, discardedCount: 1, highestSeverity: "error" });
-    expect(notificationAggregateAcrossMachines({ local, remote: staleRemote })).toEqual({ retainedCount: 2, discardedCount: 1, highestSeverity: "warning" });
-    expect(effectiveNotificationSummaries(local)[0]?.cwd).toBe("/repo");
-    expect(effectiveNotificationSummaries(remote)[0]?.cwd).toBe("/remote");
-  });
-
-  it("aggregates exact cwd and project workspace matches with overflow and severity", () => {
-    const summaries = [
-      summary({ sessionId: "a", cwd: "/repo", retainedCount: 2, discardedCount: 4, highestSeverity: "info" }),
-      summary({ sessionId: "b", cwd: "/repo-worktree", retainedCount: 1, discardedCount: 0, highestSeverity: "error" }),
-      summary({ sessionId: "c", cwd: "/other", retainedCount: 5, discardedCount: 0, highestSeverity: "warning" }),
-    ];
-
-    expect(notificationAggregateForCwd(summaries, "/repo")).toEqual({ retainedCount: 2, discardedCount: 4, highestSeverity: "info" });
-    expect(notificationAggregateForProject(summaries, new Set(["/repo", "/repo-worktree"]))).toEqual({ retainedCount: 3, discardedCount: 4, highestSeverity: "error" });
-    expect(aggregateNotificationSummaries(summaries)).toEqual({ retainedCount: 8, discardedCount: 4, highestSeverity: "error" });
-    expect(notificationBadgeModel(notificationAggregateForCwd(summaries, "/repo"))).toMatchObject({
-      text: "2+",
-      severity: "info",
-      accessibleLabel: "2 undismissed notifications, 4 older notifications discarded, highest severity info",
-    });
-  });
-});
-
 describe("notification presentation helpers", () => {
   it("chooses next, previous, then header focus targets", () => {
     const notifications = [notification(3), notification(2), notification(1)];
@@ -226,13 +159,39 @@ describe("notification presentation helpers", () => {
     expect(notificationFocusTargetAfterDismiss([notification(1)], "daemon-a:1")).toEqual({ kind: "header" });
   });
 
-  it("retains explicit collapse state and exposes a visible truncation label", () => {
-    const collapsed = setNotificationTrayCollapsed(new Set(), "session-1", true);
-    expect(collapsed.has("session-1")).toBe(true);
-    expect(setNotificationTrayCollapsed(collapsed, "session-1", false).has("session-1")).toBe(false);
-    expect(notificationInboxOverflowLabel(23)).toBe("23 older notifications were discarded because this inbox keeps the latest 100.");
-    expect(notificationMessageTruncationLabel({ truncated: true })).toContain("8 KiB");
+  it("retains collapse state by exact machine, cwd, and session identity", () => {
+    const collapsed = setNotificationTrayCollapsed(new Set(), target, true);
+
+    expect(notificationTrayIsCollapsed(collapsed, target)).toBe(true);
+    expect(notificationTrayIsCollapsed(collapsed, { ...target, machineId: "remote" })).toBe(false);
+    expect(notificationTrayIsCollapsed(collapsed, { ...target, cwd: "/other" })).toBe(false);
+    expect(notificationTrayIsCollapsed(collapsed, { ...target, sessionId: "session-2" })).toBe(false);
+    expect(notificationTargetKey(target)).not.toBe(notificationTargetKey({ ...target, cwd: "/repo|session-1" }));
+    expect(notificationTrayIsCollapsed(setNotificationTrayCollapsed(collapsed, target, false), target)).toBe(false);
+  });
+
+  it("derives compact tray copy and a count that includes older unseen notifications", () => {
+    const counts = { retainedCount: 2, discardedCount: 23 };
+
+    expect(notificationInboxTotalCount(counts)).toBe(25);
+    expect(notificationTrayHeading(counts)).toBe("Notifications (25)");
+    expect(notificationInboxOverflowLabel(1)).toBe("1 older notification not shown.");
+    expect(notificationInboxOverflowLabel(23)).toBe("23 older notifications not shown.");
+    expect(notificationMessageTruncationLabel({ truncated: true })).toBe("Message truncated at 8 KiB.");
     expect(notificationMessageTruncationLabel({ truncated: false })).toBeUndefined();
+  });
+
+  it("keeps live announcements concise and dismiss labels meaningful", () => {
+    const announcement: SessionNotificationAnnouncement = {
+      id: "daemon-a:2:daemon-a:2",
+      severity: "error",
+      message: "An arbitrarily long extension message that should not be read by the assertive live region",
+    };
+    const longNotification = notification(2, "warning", `  Build failed\n${"x".repeat(100)}`);
+
+    expect(notificationAnnouncementLabel(announcement)).toBe("Error notification received.");
+    expect(notificationDismissLabel(longNotification)).toMatch(/^Dismiss notification: Build failed x+…$/u);
+    expect(notificationDismissLabel({ message: "   ", severity: "warning" })).toBe("Dismiss warning notification");
   });
 });
 
