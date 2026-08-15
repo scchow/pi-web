@@ -239,6 +239,14 @@ export class PiWebApp extends LitElement {
     { onRefreshError: (machineId, error) => { console.warn(`Failed to refresh PI WEB status for ${machineId}`, error); } },
   );
   private readonly keyboard = new KeyboardShortcutDispatcher();
+  private readonly onMobileViewportResize = () => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    // On mobile, the layout viewport stays full-screen while the soft keyboard is open,
+    // so 100dvh does not shrink and the composer (and send button) ends up under the
+    // keyboard. Pinning the host to the visual viewport height keeps the app above it.
+    this.style.height = String(vv.height) + "px";
+  };
   private readonly realtime = new RealtimeSocket();
   private readonly serverNotices = new ServerNoticesController({
     onChange: (machineId) => {
@@ -427,6 +435,10 @@ export class PiWebApp extends LitElement {
     this.browserResume.connect();
     window.addEventListener("keydown", this.onKeyDown, GLOBAL_SHORTCUT_LISTENER_OPTIONS);
     this.systemLightThemeMedia?.addEventListener("change", this.onSystemLightThemeChange);
+    if (window.visualViewport) {
+      this.onMobileViewportResize();
+      window.visualViewport.addEventListener("resize", this.onMobileViewportResize);
+    }
     this.applyPreferredTheme(false);
     this.connectRealtime();
     this.syncSessionUnreadMachines();
@@ -447,6 +459,8 @@ export class PiWebApp extends LitElement {
     this.browserResume.disconnect();
     window.removeEventListener("keydown", this.onKeyDown, GLOBAL_SHORTCUT_LISTENER_OPTIONS);
     this.systemLightThemeMedia?.removeEventListener("change", this.onSystemLightThemeChange);
+    window.visualViewport?.removeEventListener("resize", this.onMobileViewportResize);
+    if (this.hasUpdated) this.style.height = ""; // reset to CSS 100dvh
     this.keyboard.reset();
     this.auth.dispose();
     this.sessions.dispose();
