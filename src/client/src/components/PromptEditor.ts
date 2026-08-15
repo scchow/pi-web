@@ -569,6 +569,10 @@ function readFileAsBase64(file: File): Promise<string> {
 }
 
 const proseInputAssistanceAttributes: Record<string, string> = {
+  // Without an explicit inputmode, mobile keyboards treat the bare
+  // contenteditable as a code field and show a numpad instead of the normal
+  // symbols page; "text" selects the standard keyboard layout.
+  inputmode: "text",
   spellcheck: "true",
   autocorrect: "on",
   autocapitalize: "sentences",
@@ -577,6 +581,7 @@ const proseInputAssistanceAttributes: Record<string, string> = {
 };
 
 const codeLikeInputAssistanceAttributes: Record<string, string> = {
+  inputmode: "text",
   spellcheck: "false",
   autocorrect: "off",
   autocapitalize: "off",
