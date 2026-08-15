@@ -330,11 +330,35 @@ export class PiWebApp extends LitElement {
     // freshness token below handles scoped child state; this sequence also
     // prevents an older restore from normalizing the address bar afterward.
     this.routeRestoreSeq += 1;
+    // A dialog is a transient overlay, not a route: back must dismiss the top
+    // dialog instead of navigating (the URL never changes when dialogs open).
+    if (this.closeTopDialogForBack()) return;
     void this.withChatScrollTransition(async () => {
       this.restoreSettingsRoute();
       await this.restoreRoute(false);
     });
   };
+
+  /**
+   * Dismiss the topmost transient dialog for a back/Escape gesture. Returns
+   * true when a dialog was closed and the event should not propagate to route
+   * restoration. Order matches visual stacking (later render = on top).
+   */
+  private closeTopDialogForBack(): boolean {
+    const state = this.state;
+    if (state.authDialog !== undefined) { this.setState({ authDialog: undefined }); return true; }
+    if (state.themeDialog !== undefined) { this.setState({ themeDialog: undefined }); return true; }
+    if (state.thinkingDialog !== undefined) { this.setState({ thinkingDialog: undefined }); return true; }
+    if (state.modelDialog !== undefined) { this.setState({ modelDialog: undefined }); return true; }
+    if (state.treeDialog !== undefined) { this.closeSessionTreeNavigator(); return true; }
+    if (state.commandDialog !== undefined) { this.setState({ commandDialog: undefined }); return true; }
+    if (state.machineDialogOpen) { this.setState({ machineDialogOpen: false }); return true; }
+    if (state.projectDialogOpen) { this.setState({ projectDialogOpen: false }); return true; }
+    if (this.sessionCleanupDialog !== undefined) { this.closeSessionCleanupDialog(); return true; }
+    if (state.actionPaletteOpen) { this.setState({ actionPaletteOpen: false }); return true; }
+    if (this.settingsSection !== undefined) { this.closeSettings(); return true; }
+    return false;
+  }
   private readonly onPageShow = () => {
     void this.sessionUnread.refreshAll();
     this.appShell.repairViewportPosition();
@@ -352,6 +376,10 @@ export class PiWebApp extends LitElement {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
+    // Escape closes the topmost dialog; a CommandPicker that is open handles
+    // its own Escape and stops propagation, so this only sees dialogs without
+    // an inner picker.
+    if (event.key === "Escape" && this.closeTopDialogForBack()) return;
     if (this.isRenderedModalOpen()) return;
     if (this.keyboard.handle(event, this.getDefaultActions(), { shortcuts: this.shortcutConfig })) {
       event.preventDefault();
