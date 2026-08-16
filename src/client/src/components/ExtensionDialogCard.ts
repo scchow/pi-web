@@ -384,8 +384,10 @@ export class ExtensionDialogCard extends LitElement {
       .primary-action { min-height: 42px; }
       /* Narrow screens wrap long titles into many lines (300 chars ≈ 14 lines
          at phone width), making the card taller than the viewport and hiding
-         the action buttons. A tighter cap keeps the whole card visible. */
-      h2, .dialog-message { max-height: min(25vh, 140px); }
+         the action buttons. A tighter cap keeps the whole card visible.
+         ~100px ≈ 5 lines: two lines shorter than the first mobile cap, per
+         user preference for a more compact dialog on phones. */
+      h2, .dialog-message { max-height: min(20vh, 100px); }
       /* The header is a flex row (title | status). On narrow screens the long
          title squeezes the countdown into a thin column that wraps into a tall
          block of words — and the h2 cap does not constrain it. Stack instead:
