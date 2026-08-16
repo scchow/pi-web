@@ -382,6 +382,10 @@ export class ExtensionDialogCard extends LitElement {
     }
     @container (max-width: 580px) {
       .primary-action { min-height: 42px; }
+      /* Narrow screens wrap long titles into many lines (300 chars ≈ 14 lines
+         at phone width), making the card taller than the viewport and hiding
+         the action buttons. A tighter cap keeps the whole card visible. */
+      h2, .dialog-message { max-height: min(25vh, 140px); }
     }
   `;
 }

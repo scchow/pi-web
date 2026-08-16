@@ -1158,7 +1158,17 @@ export class ChatView extends LitElement {
     const chat = this.chat;
     const card = this.renderRoot.querySelector<HTMLElement>(".chat > extension-dialog-card.open-dialog-card");
     if (chat === undefined || card === null) return false;
-    chat.scrollTop += card.getBoundingClientRect().top - chat.getBoundingClientRect().top;
+    const chatRect = chat.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
+    // A card taller than the visible area (e.g. a long command title on a
+    // narrow phone) would leave the action buttons below the fold when
+    // top-aligned. Fall back to bottom-alignment so Yes/No are always
+    // reachable; the user can scroll up for the beginning of the text.
+    if (cardRect.height > chatRect.height) {
+      chat.scrollTop += cardRect.bottom - chatRect.bottom;
+    } else {
+      chat.scrollTop += cardRect.top - chatRect.top;
+    }
     this.syncScrollMetrics();
     this.pinnedToBottom = this.isNearBottom();
     return true;
