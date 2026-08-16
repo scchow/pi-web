@@ -386,6 +386,12 @@ export class ExtensionDialogCard extends LitElement {
          at phone width), making the card taller than the viewport and hiding
          the action buttons. A tighter cap keeps the whole card visible. */
       h2, .dialog-message { max-height: min(25vh, 140px); }
+      /* The header is a flex row (title | status). On narrow screens the long
+         title squeezes the countdown into a thin column that wraps into a tall
+         block of words — and the h2 cap does not constrain it. Stack instead:
+         the status becomes one full-width line under the title. */
+      .card-header { flex-direction: column; align-items: stretch; gap: 4px; }
+      .header-status { text-align: start; }
     }
   `;
 }
