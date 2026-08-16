@@ -307,6 +307,12 @@ export class ExtensionDialogCard extends LitElement {
       font-weight: 650;
       line-height: 1.35;
       overflow-wrap: anywhere;
+      /* Long titles (e.g. a full command from permission-gate) must not push
+         the action buttons below the fold: scroll inside the header instead.
+         ChatView aligns the card's top when it opens, so an unbounded title
+         leaves Yes/No out of view. */
+      max-height: min(45vh, 320px);
+      overflow-y: auto;
     }
     .header-status { flex: 0 0 auto; color: var(--pi-muted); font-size: 11px; text-align: end; }
     .header-status.answered { color: var(--pi-success); }
@@ -316,6 +322,9 @@ export class ExtensionDialogCard extends LitElement {
       padding: 12px 16px;
       line-height: 1.4;
       overflow-wrap: anywhere;
+      /* Same below-the-fold guard as h2 for confirm-kind messages. */
+      max-height: min(45vh, 320px);
+      overflow-y: auto;
     }
     .dialog-options { display: grid; gap: 7px; padding: 12px 16px; }
     .option-button {
