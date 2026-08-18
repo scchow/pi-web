@@ -57,7 +57,8 @@ export class WorkspaceController {
       this.setState({ workspaces, workspacesByProjectId: { ...this.getState().workspacesByProjectId, [project.id]: workspaces }, isLoadingWorkspaces: false });
       const workspace = selectPreferredWorkspace(workspaces, { targetWorkspaceId: target?.workspaceId, latestWorkspaceId: this.workspaceSelection.latestWorkspaceId(machineProjectKey(machineId, project.id)) });
       if (workspace) await this.selectWorkspace(workspace, { sessionId: target?.sessionId, updateUrl: target?.updateUrl });
-      else if (target?.updateUrl !== false) this.updateUrl();
+      else if (target?.updateUrl === false) this.updateUrl({ replace: true });
+      else this.updateUrl();
     } catch (error) {
       if (selectedMachineId(this.getState()) === machineId && this.getState().selectedProject?.id === project.id) this.setState({ error: String(error), isLoadingWorkspaces: false });
     }
@@ -74,7 +75,8 @@ export class WorkspaceController {
       this.setState({ sessions });
       const session = this.sessions.preferredSession(workspace.path, sessions, target?.sessionId);
       if (session) await this.sessions.selectSession(session, { updateUrl: target?.updateUrl });
-      else if (target?.updateUrl !== false) this.updateUrl();
+      else if (target?.updateUrl === false) this.updateUrl({ replace: true });
+      else this.updateUrl();
     } catch (error) {
       if (selectedMachineId(this.getState()) === machineId && this.getState().selectedWorkspace?.id === workspace.id) this.setState({ error: String(error) });
     }

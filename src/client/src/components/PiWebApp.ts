@@ -41,7 +41,7 @@ import { BrowserResumeController } from "../appShell/browserResumeController";
 import { NavigationSectionsController, type NavigationSection } from "../appShell/navigationState";
 import { PanelCollapseController, mainViewClass } from "../appShell/panelCollapseController";
 import { PanelResizeController, type PanelResizeConstraints, type ResizablePanelSide } from "../appShell/panelResizeController";
-import { readRoute, resolveAppRoute, resolveWorkspacePanelRouteValue, writeRoute, type AppRoute, type ParsedAppRoute } from "../route";
+import { isInitialHistoryEntry, readRoute, resolveAppRoute, resolveWorkspacePanelRouteValue, writeRoute, type AppRoute, type ParsedAppRoute } from "../route";
 import { readSettingsSection, writeSettingsSection, type SettingsSection } from "../settingsRoute";
 import { applyActiveShortcutPreferences } from "../shortcutPreferences";
 import { createTerminalCommandRunsRuntime } from "../runtime/terminalRuntime";
@@ -244,6 +244,11 @@ export class PiWebApp extends LitElement {
     // A dialog is a transient overlay, not a route: back must dismiss the top
     // dialog instead of navigating (the URL never changes when dialogs open).
     if (this.closeTopDialogForBack()) return;
+    // The initial document entry is the app's base state (writeRoute replaces it
+    // instead of pushing). Back from there leaves the page, so do not treat it
+    // as a route change; otherwise transient states such as the mobile
+    // navigation view would be committed and back would close the chat.
+    if (isInitialHistoryEntry()) return;
     void this.withChatScrollTransition(async () => {
       this.restoreSettingsRoute();
       await this.restoreRoute(false);
@@ -825,9 +830,11 @@ export class PiWebApp extends LitElement {
     if (seq !== this.machineNavigationRestoreSeq || this.state.selectedMachine?.id !== machine.id) return;
     if (this.shouldPreserveUnrestoredMachineNavigation(snapshot)) {
       this.machineNavigation.remember(snapshot);
-      this.writeMachineNavigationSnapshotToUrl(snapshot);
+      this.writeMachineNavigationSnapshotToUrl(snapshot, { replace: true });
       return;
     }
+    // Machine switch is the one navigation level that keeps its own history
+    // entry; everything below it (project/workspace/session/tool) replaces.
     this.updateUrl();
   }
 
@@ -838,7 +845,9 @@ export class PiWebApp extends LitElement {
   private openWorkspaceTool(tool: QualifiedContributionId) {
     if (tool === "core:workspace.terminal") this.terminalAutoStartWorkspaceId = this.state.selectedWorkspace?.id;
     this.setState({ workspaceTool: tool, mainView: tool });
-    this.updateUrl();
+    // Workspace tools are sub-views of the current workspace; switching between
+    // them must not stack history entries (back should leave the workspace).
+    this.updateUrl({ replace: true });
     this.refreshSelectedWorkspaceTool(tool);
   }
 
@@ -909,8 +918,11 @@ export class PiWebApp extends LitElement {
       this.openWorkspaceTool(view);
       return;
     }
+    // The mobile navigation view is transient: it must not create a history
+    // entry, or back would commit it and close the chat instead of reopening it.
+    const replace = view === "navigation";
     this.setState({ mainView: view });
-    this.updateUrl();
+    this.updateUrl(replace ? { replace: true } : undefined);
   }
 
   private openSettings(section: SettingsSection = "general"): void {
@@ -1271,19 +1283,19 @@ export class PiWebApp extends LitElement {
         .onToggleProjects=${() => { this.navigationSections.toggle("projects"); }}
         .onToggleWorkspaces=${() => { this.navigationSections.toggle("workspaces"); }}
         .onToggleSessions=${() => { this.navigationSections.toggle("sessions"); }}
-        .onSelectProject=${(project: Project) => this.selectNavigationItem("projects", "workspaces", () => this.workspaces.selectProject(project))}
+        .onSelectProject=${(project: Project) => this.selectNavigationItem("projects", "workspaces", () => this.workspaces.selectProject(project, { updateUrl: false }))}
         .onCloseProject=${(project: Project) => this.projects.closeProject(project.id)}
-        .onSelectWorkspace=${(workspace: Workspace) => this.selectNavigationItem("workspaces", "sessions", () => this.workspaces.selectWorkspace(workspace))}
+        .onSelectWorkspace=${(workspace: Workspace) => this.selectNavigationItem("workspaces", "sessions", () => this.workspaces.selectWorkspace(workspace, { updateUrl: false }))}
         .onDeleteWorkspace=${(workspace: Workspace) => { void this.deleteWorkspace(workspace); }}
         .onArchivedCollapsed=${() => { this.sessions.clearSelectionAfterArchivedCollapse(); }}
         .onStartSession=${() => this.startSessionFromNavigation()}
-        .onSelectSession=${(session: SessionInfo) => this.selectNavigationItem("sessions", "chat", () => this.sessions.selectSession(session))}
+        .onSelectSession=${(session: SessionInfo) => this.selectNavigationItem("sessions", "chat", () => this.sessions.selectSession(session, { updateUrl: false }))}
         .onMarkSessionRead=${(session: SessionInfo) => { this.markSessionsRead([session]); }}
         .onMarkSessionsRead=${(sessions: SessionInfo[]) => { this.markSessionsRead(sessions); }}
         .onArchiveSession=${(session: SessionInfo) => this.sessions.archiveSession(session)}
         .onArchiveSessionWithDescendants=${(session: SessionInfo) => this.sessions.archiveSessionWithDescendants(session)}
         .onArchiveSessions=${(sessions: SessionInfo[]) => this.sessions.archiveSessions(sessions)}
-        .onRestoreSession=${(session: SessionInfo) => this.selectNavigationItem("sessions", "chat", () => this.sessions.restoreSession(session))}
+        .onRestoreSession=${(session: SessionInfo) => this.selectNavigationItem("sessions", "chat", async () => { await this.sessions.restoreSession(session); if (this.state.selectedSession?.id === session.id) await this.sessions.selectSession(session, { updateUrl: false }); })}
         .onDeleteCachedNewSession=${(session: SessionInfo) => this.sessions.deleteCachedNewSession(session)}
         .onDeleteArchivedSession=${(session: SessionInfo) => this.sessions.deleteArchivedSessions([session])}
         .onDeleteArchivedSessions=${(sessions: SessionInfo[]) => this.sessions.deleteArchivedSessions(sessions)}

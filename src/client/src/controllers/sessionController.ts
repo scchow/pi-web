@@ -236,7 +236,8 @@ export class SessionController {
         const history = this.transcripts.mergeHistory(transcriptKey, page);
         this.setState({ ...history, isLoadingEarlierMessages: false, status: undefined, activity: undefined, pendingAsk: undefined, pendingDialogs: [], closedDialogs: [] });
         this.onSelectedSessionReady?.({ machineId, session });
-        if (options?.updateUrl !== false) this.updateUrl();
+        if (options?.updateUrl === false) this.updateUrl({ replace: true });
+        else this.updateUrl();
         return;
       }
       const socketBuffer: SessionUiEvent[] = [];
@@ -254,7 +255,8 @@ export class SessionController {
       for (const event of socketBuffer) this.applyEvent(event);
       this.socket.setHandler((event) => { this.applyEvent(event); });
       this.onSelectedSessionReady?.({ machineId, session });
-      if (options?.updateUrl !== false) this.updateUrl();
+      if (options?.updateUrl === false) this.updateUrl({ replace: true });
+      else this.updateUrl();
     } catch (error) {
       if (seq !== this.selectionSeq || this.getState().selectedSession?.id !== session.id) {
         // Tree navigation still needs to know when a same-session reselection's
@@ -480,7 +482,12 @@ export class SessionController {
       throw error;
     }
 
-    if (result.cancelled) return result;
+    if (result.cancelled) {
+      // A cancelled navigation still rewrites the current session's transcript,
+      // so sync the URL (replacing, not pushing) for the new session id.
+      this.updateUrl({ replace: true });
+      return result;
+    }
 
     const editorText = result.editorText ?? "";
     saveDraft(cacheKey, editorText);
@@ -1183,7 +1190,8 @@ export class SessionController {
     // Re-selecting the row mid-startup re-establishes the constructing
     // session's subscription; the close above dropped it with the old selection.
     if (pendingStart?.backendSessionId !== undefined) this.connectPendingStartSocket(pendingStart);
-    if (options?.updateUrl !== false) this.updateUrl();
+    if (options?.updateUrl === false) this.updateUrl({ replace: true });
+    else this.updateUrl();
   }
 
   private async resolvePendingSessionStart(tempId: string, session: SessionInfo): Promise<void> {

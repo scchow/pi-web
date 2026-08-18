@@ -1,3 +1,5 @@
+import { readHistoryState, isInitialHistoryEntry } from "./route";
+
 export type SettingsSection = "general" | "sessiond" | "packages" | "plugins" | "shortcuts";
 
 export function readSettingsSection(): SettingsSection | undefined {
@@ -11,7 +13,9 @@ export function writeSettingsSection(section: SettingsSection | undefined, optio
   const next = `${url.pathname}${url.search}${url.hash}`;
   const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
   if (next === current) return;
-  if (options?.replace === true) window.history.replaceState({}, "", url);
+  // Keep the initial document entry as the app's base state; see writeRoute in route.ts.
+  const replace = options?.replace === true || readHistoryState().initial === true || isInitialHistoryEntry();
+  if (replace) window.history.replaceState({ ...readHistoryState(), initial: false }, "", url);
   else window.history.pushState({}, "", url);
 }
 

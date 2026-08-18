@@ -112,6 +112,8 @@ describe("SessionController reload and selection", () => {
 
     expect(state.selectedSession).toBeUndefined();
     expect(controller.preferredSession(workspace.path, state.sessions, undefined)).toBeUndefined();
-    expect(urlUpdates).toEqual([undefined]);
+    // updateUrl: false still syncs the URL (without a new history entry);
+    // clearing the selection writes the default route without options.
+    expect(urlUpdates).toEqual([{ replace: true }, undefined]);
   });
 });
