@@ -78,17 +78,7 @@ export class CommandPicker extends LitElement {
   private handleKeyDown(event: KeyboardEvent) {
     if (keyboardEventOriginatesFromNativeActivationControl(event)) return;
     const options = this.filteredOptions();
-<<<<<<< HEAD
     if (event.key === "ArrowDown") {
-=======
-    if (event.key === "Escape") {
-      // Close only this picker; stop propagation so the app-level Escape
-      // handler does not dismiss a dialog underneath as well.
-      event.preventDefault();
-      event.stopPropagation();
-      this.onCancel?.();
-    } else if (event.key === "ArrowDown") {
->>>>>>> 7f3b597 (fix(dialogs): close the topmost dialog on back/Escape instead of navigating)
       event.preventDefault();
       if (options.length > 0) this.selectedIndex = (this.selectedIndex + 1) % options.length;
     } else if (event.key === "ArrowUp") {
