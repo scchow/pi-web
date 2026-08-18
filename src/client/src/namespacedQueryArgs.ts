@@ -1,3 +1,4 @@
+import { readHistoryState, isInitialHistoryEntry } from "./route";
 import type { QualifiedContributionId } from "./plugins/ids";
 
 export type QueryValue = string | number | boolean | readonly (string | number | boolean)[];
@@ -234,7 +235,9 @@ function commitUrl(url: URL, options?: { replace?: boolean | undefined }): boole
   const next = `${url.pathname}${url.search}${url.hash}`;
   const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
   if (next === current) return false;
-  if (options?.replace === true) window.history.replaceState({}, "", url);
+  // Keep the initial document entry as the app's base state; see writeRoute in route.ts.
+  const replace = options?.replace === true || readHistoryState().initial === true || isInitialHistoryEntry();
+  if (replace) window.history.replaceState({ ...readHistoryState(), initial: false }, "", url);
   else window.history.pushState({}, "", url);
   return true;
 }

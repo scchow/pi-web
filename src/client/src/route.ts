@@ -67,6 +67,33 @@ export function routeMatchesWorkspaceIdentity(
     && route.workspaceId === identity.workspaceId;
 }
 
+/** Shape of the history state pi-web writes for its route entries. */
+export interface PiWebHistoryState {
+  /** False once the initial document entry has been taken over by writeRoute. */
+  initial?: boolean | undefined;
+}
+
+export function readHistoryState(): PiWebHistoryState {
+  const state: unknown = window.history.state;
+  if (typeof state !== "object" || state === null) return {};
+  let initial: boolean | undefined;
+  for (const [key, value] of Object.entries(state)) {
+    if (key === "initial" && typeof value === "boolean") initial = value;
+  }
+  return { initial };
+}
+
+/**
+ * True when the current history entry is still the app's initial document URL
+ * (no query parameters). The route is written with pushState for every
+ * selection change, so this distinguishes "the user has not navigated yet"
+ * from a real navigation; back on the initial entry must not be consumed as
+ * one.
+ */
+export function isInitialHistoryEntry(): boolean {
+  return window.location.search === "";
+}
+
 export function writeRoute(route: ParsedAppRoute, options?: { replace?: boolean | undefined }): void {
   const url = new URL(window.location.href);
   url.searchParams.delete("machine");
@@ -84,7 +111,11 @@ export function writeRoute(route: ParsedAppRoute, options?: { replace?: boolean 
   const next = `${url.pathname}${url.search}${url.hash}`;
   const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
   if (next === current) return;
-  if (options?.replace === true) window.history.replaceState({}, "", url);
+  // The initial document entry is the app's base state: overwrite it instead of
+  // stacking navigation entries on top, so the browser back button never has to
+  // unwind the very first selection.
+  const replace = options?.replace === true || readHistoryState().initial === true || isInitialHistoryEntry();
+  if (replace) window.history.replaceState({ ...readHistoryState(), initial: false }, "", url);
   else window.history.pushState({}, "", url);
 }
 

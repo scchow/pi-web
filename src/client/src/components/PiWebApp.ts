@@ -46,7 +46,7 @@ import { BrowserResumeController } from "../appShell/browserResumeController";
 import { NavigationSectionsController, type NavigationSection } from "../appShell/navigationState";
 import { PanelCollapseController, mainViewClass } from "../appShell/panelCollapseController";
 import { PanelResizeController, type PanelResizeConstraints, type ResizablePanelSide } from "../appShell/panelResizeController";
-import { readRoute, resolveAppRoute, resolveWorkspacePanelRouteValue, routeMatchesWorkspaceIdentity, writeRoute, type AppRoute, type ParsedAppRoute, type WorkspaceRouteIdentity } from "../route";
+import { isInitialHistoryEntry, readRoute, resolveAppRoute, resolveWorkspacePanelRouteValue, routeMatchesWorkspaceIdentity, writeRoute, type AppRoute, type ParsedAppRoute, type WorkspaceRouteIdentity } from "../route";
 import { readSettingsSection, writeSettingsSection, type SettingsSection } from "../settingsRoute";
 import { applyActiveShortcutPreferences } from "../shortcutPreferences";
 import { canDeleteWorkspace, isWorkspaceDeletionPending, isWorkspaceDeletionRunPending, latestWorkspaceDeletionRuns, pendingWorkspaceDeletionIds, targetWorkspaceIdForRun, workspaceDeletionRunFilter, workspaceRemovalConfirmation } from "../workspaceDeletion";
@@ -333,6 +333,11 @@ export class PiWebApp extends LitElement {
     // A dialog is a transient overlay, not a route: back must dismiss the top
     // dialog instead of navigating (the URL never changes when dialogs open).
     if (this.closeTopDialogForBack()) return;
+    // The initial document entry is the app's base state (writeRoute replaces it
+    // instead of pushing). Back from there leaves the page, so do not treat it
+    // as a route change; otherwise transient states such as the mobile
+    // navigation view would be committed and back would close the chat.
+    if (isInitialHistoryEntry()) return;
     void this.withChatScrollTransition(async () => {
       this.restoreSettingsRoute();
       await this.restoreRoute(false);
