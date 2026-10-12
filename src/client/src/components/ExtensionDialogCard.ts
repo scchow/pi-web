@@ -280,6 +280,10 @@ export class ExtensionDialogCard extends LitElement {
       container-type: inline-size;
     }
     .card {
+      display: flex;
+      flex-direction: column;
+      max-height: min(90vh, 720px);
+      max-height: min(90dvh, 720px);
       border: 1px solid var(--pi-border);
       border-radius: 10px;
       background: var(--pi-surface);
@@ -289,10 +293,15 @@ export class ExtensionDialogCard extends LitElement {
       top: var(--pi-chat-sticky-top, 0px);
       z-index: 6;
       display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      min-height: 22px;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 6px;
+      /* The header is the flexible area: when the title (e.g. a full command)
+         is long, the h2 below scrolls inside it and the options/footer stay
+         pinned. For short titles the card stays content-sized (max-height is
+         a ceiling, not a fixed height), so this never adds empty space. */
+      flex: 1 1 auto;
+      min-height: 0;
       padding: 8px 16px 7px;
       border-bottom: 1px solid var(--pi-border-muted);
       border-radius: 9px 9px 0 0;
@@ -307,11 +316,16 @@ export class ExtensionDialogCard extends LitElement {
       font-weight: 650;
       line-height: 1.35;
       overflow-wrap: anywhere;
-      /* Long titles (e.g. a full command from permission-gate) must not push
-         the action buttons below the fold: scroll inside the header instead.
-         ChatView aligns the card's top when it opens, so an unbounded title
-         leaves Yes/No out of view. */
-      max-height: min(70vh, 560px);
+      /* Long titles (e.g. a full command from permission-gate) are capped to a
+         definite height so they scroll instead of growing to full length and
+         pushing the action buttons off-screen. A flex-only height is not
+         definite while the card is content-sized (max-height, not a fixed
+         height), so overflow-y: auto needs an explicit max-height to trigger.
+         The cap leaves room for the pinned options + footer below. */
+      flex: 1 1 auto;
+      min-height: 0;
+      max-height: min(18vh, 150px);
+      max-height: min(18dvh, 150px);
       overflow-y: auto;
     }
     .header-status { flex: 0 0 auto; color: var(--pi-muted); font-size: 11px; text-align: end; }
@@ -326,7 +340,7 @@ export class ExtensionDialogCard extends LitElement {
       max-height: min(70vh, 560px);
       overflow-y: auto;
     }
-    .dialog-options { display: grid; gap: 7px; padding: 12px 16px; }
+    .dialog-options { display: grid; gap: 7px; padding: 12px 16px; flex: 0 0 auto; }
     .option-button {
       display: block;
       width: 100%;
@@ -353,6 +367,7 @@ export class ExtensionDialogCard extends LitElement {
       align-items: center;
       justify-content: flex-end;
       gap: 8px;
+      flex: 0 0 auto;
       border-top: 1px solid var(--pi-border-muted);
       padding: 12px 16px;
     }
@@ -382,11 +397,7 @@ export class ExtensionDialogCard extends LitElement {
     }
     @container (max-width: 580px) {
       .primary-action { min-height: 42px; }
-      /* Narrow screens wrap long titles into many lines, making the card
-         taller than the viewport and hiding the action buttons. A tighter
-         cap keeps the whole card visible (~100px, about 5 lines, per user
-         preference for a more compact dialog on phones). */
-      h2, .dialog-message { max-height: min(55vh, 380px); overflow-y: auto; }
+      .dialog-message { max-height: min(55vh, 380px); overflow-y: auto; }
     }
   `;
 }
